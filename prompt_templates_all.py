@@ -2,6 +2,8 @@
 Prompt Templates and Messages in LangChain V.1
 """
 
+from pyexpat.errors import messages
+
 from langchain_core.prompts import (
     ChatPromptTemplate,
     FewShotChatMessagePromptTemplate,
@@ -16,6 +18,14 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+BLUE = "\033[34m"
+RESET = "\033[0m"
+
+
+def bprint(*args, **kwargs):
+    args = (f"{BLUE}{a}{RESET}" for a in args)
+    print(*args, **kwargs)
 
 
 def demo_basic_templates():
@@ -55,8 +65,15 @@ def demo_message_types():
         HumanMessage(content="And if I add 10?"),
     ]
 
+    # Way 1: direct model invoke with a message list
     response = model.invoke(messages)
-    print(f"Conversation result: {response.content}")
+    print(f"AI Model invoke result: {response.content}")
+
+    # Way 2: chain via pipe operator (requires a ChatPromptTemplate)
+    prompt = ChatPromptTemplate.from_messages(messages)
+    chain = prompt | model
+    response = chain.invoke({})
+    print(f"AIChain result: {response.content}")
 
 
 def demo_messages_placeholder():
@@ -84,7 +101,7 @@ def demo_messages_placeholder():
 
     # Execute
     model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    
+
     chain = prompt | model
     response = chain.invoke({"history": history, "question": "What's my name?"})
     print(f"\nResponse: {response.content}")
@@ -170,33 +187,27 @@ def demo_prompt_composition():
     print(f"\nScientist: {response.content[:100]}...")
 
 
+def print_section(title):
+    bprint("\n" + "=" * 50)
+    bprint(title)
+    bprint("=" * 50)
+
+
 if __name__ == "__main__":
-    print("=" * 50)
-    print("Demo 1: Basic Templates")
-    print("=" * 50)
+    print_section("Demo 1: Basic Templates")
     demo_basic_templates()
 
-    print("\n" + "=" * 50)
-    print("Demo 2: Message Types")
-    print("=" * 50)
+    print_section("Demo 2: Message Types")
     demo_message_types()
 
-    print("\n" + "=" * 50)
-    print("Demo 3: MessagesPlaceholder")
-    print("=" * 50)
+    print_section("Demo 3: MessagesPlaceholder")
     demo_messages_placeholder()
 
-    print("\n" + "=" * 50)
-    print("Demo 4: Few-Shot")
-    print("=" * 50)
+    print_section("Demo 4: Few-Shot")
     demo_few_shot()
 
-    print("\n" + "=" * 50)
-    print("Demo 5: Prompt Composition")
-    print("=" * 50)
+    print_section("Demo 5: Prompt Composition")
     demo_prompt_composition()
 
-    # print("\n" + "=" * 50)
-    # print("Exercise: Prompt Library")
-    # print("=" * 50)
+    # print_section("Exercise: Prompt Library")
     # exercise_prompt_library()

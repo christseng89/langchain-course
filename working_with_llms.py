@@ -6,96 +6,94 @@ Multiple providers, configuration, streaming, and cost optimization
 from dotenv import load_dotenv
 import os
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
+from rich.console import Console
 
 load_dotenv()
 
+console = Console()
+MODEL_COLORS = ["cyan", "green", "magenta", "yellow", "blue"]
 
-def demo_init_chat_model():
-    chat_model = init_chat_model(
-        model="gpt-4o-mini",
-        # model_provider="openai",
+ROLE_STYLE = {
+    SystemMessage: ("System", "magenta"),
+    HumanMessage: ("Human", "blue"),
+}
+
+
+def print_messages(messages):
+    if isinstance(messages, str):
+        console.rule(style="blue")
+        console.print(f"[bold blue]Human:[/bold blue] {messages}")
+        console.print()
+        return
+    if messages and isinstance(messages[0], SystemMessage):
+        console.rule(style="blue")
+    for msg in messages:
+        label, color = ROLE_STYLE.get(type(msg), ("AI", "green"))
+        console.print(f"[bold {color}]{label}:[/bold {color}] {msg.content}")
+    console.print()
+
+
+def print_response(source: str, content: str, color: str = "cyan"):
+    console.rule(f"[bold {color}]{source}[/bold {color}]")
+    console.print(content)
+    console.print()
+
+
+def make_model(name: str, provider: str = None, streaming: bool = False):
+    return init_chat_model(
+        model=name,
+        model_provider=provider,
         temperature=0.7,
-        streaming=True,
+        streaming=streaming,
         max_retries=3,
     )
 
-    response = chat_model.invoke("What is the capital of France? Answer in one word.")
-    print(f"Response: {response.content}")
 
-    # easy to switch model providers
+def demo_init_chat_model():
+    question = "What is the capital of France? Answer in one word."
+    print_messages(question)
+    response = make_model("gpt-4o-mini", streaming=True).invoke(question)
+    print_response("gpt-4o-mini", response.content, "cyan")
+
     if os.getenv("ANTHROPIC_API_KEY"):
-        claude = init_chat_model(
-            model="claude-sonnet-4-5-20250929",
-            model_provider="anthropic",
-            temperature=0.7,
-            streaming=True,
-            max_retries=3,
-        )
-
-        response = claude.invoke("What is the capital of France? Answer in one word.")
-        print(f"Response from Anthropic: {response.content}")
+        print_messages(question)
+        response = make_model("claude-sonnet-4-5-20250929", provider="anthropic", streaming=True).invoke(question)
+        print_response("Anthropic", response.content, "green")
 
 
 def demo_model_comparison():
     prompt = "Explain recursion in one sentence."
+    print_messages(prompt)
 
-    models = {
-        "gpt-4o-mini": init_chat_model(
-            model="gpt-4o-mini",
-            temperature=0.7,
-            streaming=False,
-        ),
-        "gpt-4o": init_chat_model(
-            model="gpt-4o",
-            temperature=0.7,
-            streaming=False,
-        ),
-    }
-
-    # add anthropic model if available
+    model_names = ["gpt-4o-mini", "gpt-4o"]
     if os.getenv("ANTHROPIC_API_KEY"):
-        models["claude-sonnet-4-5-20250929"] = init_chat_model(
-            model="claude-sonnet-4-5-20250929",
-            model_provider="anthropic",
-            temperature=0.7,
-            streaming=False,
-        )
+        model_names.append("claude-sonnet-4-5-20250929")
 
-    print(f"Prompt: {prompt}\n")
-
-    for model_name, model in models.items():
-        response = model.invoke(prompt)
-        print(f"Response from {model_name}: {response.content}\n")
+    for i, name in enumerate(model_names):
+        provider = "anthropic" if "claude" in name else None
+        response = make_model(name, provider=provider).invoke(prompt)
+        print_response(name, response.content, MODEL_COLORS[i % len(MODEL_COLORS)])
 
 
 def demo_message():
     model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    # using message objects (more control over roles)
     messages = [
         SystemMessage(content="You are a pirate. Always answer like a pirate."),
         HumanMessage(content="What's the weather like today?"),
     ]
-    # print("Using message objects:")
-    # print(f"Messages: {messages[0]} | {messages[1]}")
+    print_messages(messages)
+    print_response("The Pirate", model.invoke(messages).content, "yellow")
 
-    response = model.invoke(messages)
-    print(f"Response from the Pirate: {response.content}")
-
-    # Multi-turn conversation using message objects
-    messages.append(response)  # add model's response to the conversation
+    messages.append(model.invoke(messages))
     messages.append(HumanMessage(content="What about tomorrow?"))
+    console.print("[bold]Multi-turn conversation:[/bold]")
+    print_messages([messages[-1]])
+    print_response("The Pirate (Follow-up)", model.invoke(messages).content, "yellow")
 
-    print("\nMulti-turn conversation:")
-    response = model.invoke(messages)
-    print(f"Follow-up response from the Pirate: {response.content}")
 
-
-# Exercise: Multi-model setup
 def exercise_multi_model():
     """
     EXERCISE: Create a function that:
@@ -103,29 +101,38 @@ def exercise_multi_model():
     2. Gets responses from all models
     3. Returns a dict of {model_name: response}
 
-    Test with: question="What is AI?", models=["gpt-4o-mini", "gpt-4o"]
+    Test with: question="What is AI?", models=["gpt-4o-mini", "gpt-4o", "claude-sonnet-4-5-20250929"]
     """
 
-    def get_responses(question: str, model_names: list[str]) -> dict[str, str]:
-        responses = {}
-        for model_name in model_names:
-            model = init_chat_model(
-                model=model_name,
-                temperature=0.7,
-                streaming=False,
-            )
-            response = model.invoke(question)
-            responses[model_name] = response.content
-        return responses
+    def get_responses(question: str, model_names: list[str], system_prompt: str = None) -> dict[str, str]:
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=question))
+        print_messages(messages)
+        return {name: make_model(name).invoke(messages).content for name in model_names}
 
-    # Test the function
-    results = get_responses("What is AI?", ["gpt-4o-mini", "gpt-4o"])
-    for model, answer in results.items():
-        print(f"Response from {model}: {answer}\n")
+    results = get_responses(
+        "What is AI?",
+        ["gpt-4o-mini", "gpt-4o", "claude-sonnet-4-5-20250929"],
+        system_prompt="请用中文回答所有问题。",
+    )
+    for i, (model, answer) in enumerate(results.items()):
+        print_response(model, answer, MODEL_COLORS[i % len(MODEL_COLORS)])
 
+
+# Recursive function to calculate factorial
+def factorial(n):
+    # Base Case (終止條件)
+    if n == 0 or n == 1:
+        return 1
+
+    # Recursive Case (遞迴)
+    return n * factorial(n - 1)
 
 if __name__ == "__main__":
-    # demo_init_chat_model()
-    # demo_model_comparison()
-    # demo_message()
+    demo_init_chat_model()
+    demo_model_comparison()
+    demo_message()
     exercise_multi_model()
+    # print(factorial(5))  # Output: 120
