@@ -2,20 +2,18 @@
 Prompt Templates and Messages in LangChain V.1
 """
 
-from pyexpat.errors import messages
-
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    FewShotChatMessagePromptTemplate,
-    MessagesPlaceholder,
-)
+from dotenv import load_dotenv
 from langchain_core.messages import (
-    SystemMessage,
-    HumanMessage,
-    AIMessage,
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+)
+from langchain_core.prompts import (
+  ChatPromptTemplate,
+  FewShotChatMessagePromptTemplate,
+  MessagesPlaceholder,
 )
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -24,190 +22,188 @@ RESET = "\033[0m"
 
 
 def bprint(*args, **kwargs):
-    args = (f"{BLUE}{a}{RESET}" for a in args)
-    print(*args, **kwargs)
+  args = (f"{BLUE}{a}{RESET}" for a in args)
+  print(*args, **kwargs)
 
 
 def demo_basic_templates():
-    """Basic ChatPromptTemplate usage."""
+  """Basic ChatPromptTemplate usage."""
 
-    # Simple template
-    simple = ChatPromptTemplate.from_template("Translate '{text}' to {language}")
+  # Simple template
+  simple = ChatPromptTemplate.from_template("Translate '{text}' to {language}")
 
-    messages = simple.format_messages(text="Hello, world!", language="French")
-    print("Simple template:")
-    print(f"  {messages}")
+  messages = simple.format_messages(text="Hello, world!", language="French")
+  print("Simple template:")
+  print(f"  {messages}")
 
-    # Multi-message template
-    multi = ChatPromptTemplate.from_messages(
-        [
-            ("system", "You are a translator. Be concise."),
-            ("human", "Translate '{text}' to {language}"),
-        ]
-    )
+  # Multi-message template
+  multi = ChatPromptTemplate.from_messages(
+    [
+      ("system", "You are a translator. Be concise."),
+      ("human", "Translate '{text}' to {language}"),
+    ]
+  )
 
-    messages = multi.format_messages(text="Good morning", language="Japanese")
-    print("\nMulti-message template:")
-    for msg in messages:
-        print(f"  {type(msg).__name__}: {msg.content}")
+  messages = multi.format_messages(text="Good morning", language="Japanese")
+  print("\nMulti-message template:")
+  for msg in messages:
+    print(f"  {type(msg).__name__}: {msg.content}")
 
 
 def demo_message_types():
-    """Working with different message types."""
+  """Working with different message types."""
 
-    model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+  model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    # Build conversation manually
-    messages = [
-        SystemMessage(content="You are a math tutor. Be brief."),
-        HumanMessage(content="What's 5 * 5?"),
-        AIMessage(content="25"),
-        HumanMessage(content="And if I add 10?"),
-    ]
+  # Build conversation manually
+  messages = [
+    SystemMessage(content="You are a math tutor. Be brief."),
+    HumanMessage(content="What's 5 * 5?"),
+    AIMessage(content="25"),
+    HumanMessage(content="And if I add 10?"),
+  ]
 
-    # Way 1: direct model invoke with a message list
-    response = model.invoke(messages)
-    print(f"AI Model invoke result: {response.content}")
+  # Way 1: direct model invoke with a message list
+  response = model.invoke(messages)
+  print(f"AI Model invoke result: {response.content}")
 
-    # Way 2: chain via pipe operator (requires a ChatPromptTemplate)
-    prompt = ChatPromptTemplate.from_messages(messages)
-    chain = prompt | model
-    response = chain.invoke({})
-    print(f"AIChain result: {response.content}")
+  # Way 2: chain via pipe operator (requires a ChatPromptTemplate)
+  prompt = ChatPromptTemplate.from_messages(messages)
+  chain = prompt | model
+  response = chain.invoke({})
+  print(f"AIChain result: {response.content}")
 
 
 def demo_messages_placeholder():
-    """Use MessagesPlaceholder for dynamic conversation history."""
+  """Use MessagesPlaceholder for dynamic conversation history."""
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "You are a helpful assistant."),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{question}"),
-        ]
-    )
-
-    # Simulate conversation history
-    history = [
-        HumanMessage(content="My name is Paulo"),
-        AIMessage(content="Nice to meet you, Paulo!"),
+  prompt = ChatPromptTemplate.from_messages(
+    [
+      ("system", "You are a helpful assistant."),
+      MessagesPlaceholder(variable_name="history"),
+      ("human", "{question}"),
     ]
+  )
 
-    messages = prompt.format_messages(history=history, question="What's my name?")
+  # Simulate conversation history
+  history = [
+    HumanMessage(content="My name is Paulo"),
+    AIMessage(content="Nice to meet you, Paulo!"),
+  ]
 
-    print("With history placeholder:")
-    for msg in messages:
-        print(f"  {type(msg).__name__}: {msg.content[:50]}...")
+  messages = prompt.format_messages(history=history, question="What's my name?")
 
-    # Execute
-    model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+  print("With history placeholder:")
+  for msg in messages:
+    print(f"  {type(msg).__name__}: {msg.content[:50]}...")
 
-    chain = prompt | model
-    response = chain.invoke({"history": history, "question": "What's my name?"})
-    print(f"\nResponse: {response.content}")
+  # Execute
+  model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+  chain = prompt | model
+  response = chain.invoke({"history": history, "question": "What's my name?"})
+  print(f"\nResponse: {response.content}")
 
 
 def demo_few_shot():
-    """Few-shot prompting with examples."""
+  """Few-shot prompting with examples."""
 
-    # Define examples
-    examples = [
-        {"word": "happy", "opposite": "sad"},
-        {"word": "fast", "opposite": "slow"},
-        {"word": "big", "opposite": "small"},
+  # Define examples
+  examples = [
+    {"word": "happy", "opposite": "sad"},
+    {"word": "fast", "opposite": "slow"},
+    {"word": "big", "opposite": "small"},
+  ]
+
+  # Template for each example
+  example_prompt = ChatPromptTemplate.from_messages(
+    [
+      ("human", "What's the opposite of '{word}'?"),
+      ("ai", "The opposite of '{word}' is '{opposite}'."),
     ]
+  )
 
-    # Template for each example
-    example_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("human", "What's the opposite of '{word}'?"),
-            ("ai", "The opposite of '{word}' is '{opposite}'."),
-        ]
-    )
+  # Few-shot wrapper
+  few_shot = FewShotChatMessagePromptTemplate(
+    example_prompt=example_prompt,
+    examples=examples,
+  )
 
-    # Few-shot wrapper
-    few_shot = FewShotChatMessagePromptTemplate(
-        example_prompt=example_prompt,
-        examples=examples,
-    )
+  # Final prompt
+  final_prompt = ChatPromptTemplate.from_messages(
+    [
+      ("system", "You give the opposite of words. Follow the examples."),
+      few_shot,
+      ("human", "What's the opposite of '{word}'?"),
+    ]
+  )
 
-    # Final prompt
-    final_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", "You give the opposite of words. Follow the examples."),
-            few_shot,
-            ("human", "What's the opposite of '{word}'?"),
-        ]
-    )
+  # Test
+  model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+  chain = final_prompt | model
 
-    # Test
-    model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    chain = final_prompt | model
-
-    response = chain.invoke({"word": "bright"})
-    print(f"Few-shot result: {response.content}")
+  response = chain.invoke({"word": "bright"})
+  print(f"Few-shot result: {response.content}")
 
 
 def demo_prompt_composition():
-    """Compose prompts from reusable parts."""
+  """Compose prompts from reusable parts."""
 
-    # Reusable system prompt
-    persona = ChatPromptTemplate.from_messages(
-        [("system", "You are a {role}. Your tone is {tone}.")]
-    )
+  # Reusable system prompt
+  persona = ChatPromptTemplate.from_messages([("system", "You are a {role}. Your tone is {tone}.")])
 
-    # Reusable task prompt
-    task = ChatPromptTemplate.from_messages([("human", "{task}")])
+  # Reusable task prompt
+  task = ChatPromptTemplate.from_messages([("human", "{task}")])
 
-    # Combine
-    full_prompt = persona + task
+  # Combine
+  full_prompt = persona + task
 
-    # Test different combinations
-    model = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-    chain = full_prompt | model
+  # Test different combinations
+  model = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+  chain = full_prompt | model
 
-    # As a pirate
-    response = chain.invoke(
-        {
-            "role": "pirate captain",
-            "tone": "adventurous",
-            "task": "Tell me about your ship",
-        }
-    )
-    print(f"Pirate: {response.content[:100]}...")
+  # As a pirate
+  response = chain.invoke(
+    {
+      "role": "pirate captain",
+      "tone": "adventurous",
+      "task": "Tell me about your ship",
+    }
+  )
+  print(f"Pirate: {response.content[:100]}...")
 
-    # As a scientist
-    response = chain.invoke(
-        {
-            "role": "scientist",
-            "tone": "precise and academic",
-            "task": "Explain photosynthesis",
-        }
-    )
-    print(f"\nScientist: {response.content[:100]}...")
+  # As a scientist
+  response = chain.invoke(
+    {
+      "role": "scientist",
+      "tone": "precise and academic",
+      "task": "Explain photosynthesis",
+    }
+  )
+  print(f"\nScientist: {response.content[:100]}...")
 
 
 def print_section(title):
-    bprint("\n" + "=" * 50)
-    bprint(title)
-    bprint("=" * 50)
+  bprint("\n" + "=" * 50)
+  bprint(title)
+  bprint("=" * 50)
 
 
 if __name__ == "__main__":
-    print_section("Demo 1: Basic Templates")
-    demo_basic_templates()
+  print_section("Demo 1: Basic Templates")
+  demo_basic_templates()
 
-    print_section("Demo 2: Message Types")
-    demo_message_types()
+  print_section("Demo 2: Message Types")
+  demo_message_types()
 
-    print_section("Demo 3: MessagesPlaceholder")
-    demo_messages_placeholder()
+  print_section("Demo 3: MessagesPlaceholder")
+  demo_messages_placeholder()
 
-    print_section("Demo 4: Few-Shot")
-    demo_few_shot()
+  print_section("Demo 4: Few-Shot")
+  demo_few_shot()
 
-    print_section("Demo 5: Prompt Composition")
-    demo_prompt_composition()
+  print_section("Demo 5: Prompt Composition")
+  demo_prompt_composition()
 
-    # print_section("Exercise: Prompt Library")
-    # exercise_prompt_library()
+  # print_section("Exercise: Prompt Library")
+  # exercise_prompt_library()

@@ -1,23 +1,15 @@
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    FewShotChatMessagePromptTemplate,
-    MessagesPlaceholder,
-)
-from langchain_core.messages import (
-    SystemMessage,
-    HumanMessage,
-    AIMessage,
-)
-from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-from langchain_core.output_parsers import StrOutputParser
 from langchain.chat_models import init_chat_model
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import (
+  ChatPromptTemplate,
+)
 
 load_dotenv()
 
 
 def print_description(text):
-    print(f"\n\033[94m{'***'} {text} {'***'}\033[0m\n")
+  print(f"\n\033[94m{'***'} {text} {'***'}\033[0m\n")
 
 
 parser = StrOutputParser()
@@ -27,14 +19,16 @@ chain = prompt | model | parser
 
 response = chain.invoke({"topic": "nature"})
 print_description("StrOutputParser result type")
-print(f"Type: {type(response)}\n\nResponse: {response}")  # <class 'str'> A short poem about nature...
+print(
+  f"Type: {type(response)}\n\nResponse: {response}"
+)  # <class 'str'> A short poem about nature...
 
 
 # JsonOutputParser example
 from langchain_core.output_parsers import JsonOutputParser
 
 prompt = ChatPromptTemplate.from_template(
-    "Return a JSON object with 'name','gender' and 'age' for: {description}"
+  "Return a JSON object with 'name','gender' and 'age' for: {description}"
 )
 parser = JsonOutputParser()
 chain = prompt | model | parser
@@ -49,13 +43,14 @@ from pydantic import BaseModel, Field
 
 
 class Person(BaseModel):
-    name: str = Field(description="The person's name")
-    age: int = Field(description="The person's age")
-    occupation: str = Field(description="The person's occupation")
+  name: str = Field(description="The person's name")
+  age: int = Field(description="The person's age")
+  occupation: str = Field(description="The person's occupation")
+
 
 prompt = ChatPromptTemplate.from_template(
-    "Return a JSON object with 'name', 'age', and 'occupation' for: {description}"
-    ).partial(format_instructions=parser.get_format_instructions())
+  "Return a JSON object with 'name', 'age', and 'occupation' for: {description}"
+).partial(format_instructions=parser.get_format_instructions())
 parser = PydanticOutputParser(pydantic_object=Person)
 chain = prompt | model | parser
 
@@ -66,9 +61,10 @@ print(result)  # Person(name='Maria', age=30, occupation='artist')
 
 # Structured Output via with_structured_output
 class MovieReview(BaseModel):
-    title: str = Field(description="The title of the movie")
-    review: str = Field(description="A brief review of the movie within 50 words")
-    rating: int = Field(description="The rating of the movie out of 10")
+  title: str = Field(description="The title of the movie")
+  review: str = Field(description="A brief review of the movie within 50 words")
+  rating: int = Field(description="The rating of the movie out of 10")
+
 
 # Bind the schema to the model
 structured_model = model.with_structured_output(MovieReview)
@@ -81,8 +77,8 @@ print(f"Title: {result.title}\n\nReview: {result.review}\n\nRating: {result.rati
 # Same result using chain = prompt | model | parser
 parser = PydanticOutputParser(pydantic_object=MovieReview)
 prompt = ChatPromptTemplate.from_template(
-    "Review this movie and return a JSON object with 'title', 'review within 30 words', and 'rating' out of 10.\n"
-    "Movie: {input}"
+  "Review this movie and return a JSON object with 'title', 'review within 30 words', and 'rating' out of 10.\n"
+  "Movie: {input}"
 ).partial(format_instructions=parser.get_format_instructions())
 
 parser = PydanticOutputParser(pydantic_object=MovieReview)

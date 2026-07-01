@@ -1,13 +1,13 @@
-from dotenv import load_dotenv
 from importlib.metadata import version
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
 core_version = version("langchain-core")
 lg_version = version("langgraph")
-from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
-
+from langchain_openai import ChatOpenAI
 
 print(f"langchain-core version: {core_version}")
 print(f"langgraph version: {lg_version}\n")
@@ -15,18 +15,18 @@ print(f"langgraph version: {lg_version}\n")
 
 def main():
 
-    # Test openai
-    llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
-    response = llm.invoke("Say 'setup complete!' in one word").content
-    print(f"Response from ChatOpenAI: {response}\n")
+  # Test openai
+  llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
+  response = llm.invoke("Say 'setup complete!' in one word").content
+  print(f"Response from ChatOpenAI: {response}\n")
 
-    # Test anthropic
-    llm_anthropic = ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0)
-    response_anthropic = llm_anthropic.invoke("Say 'setup complete!' in one word").content
-    print(f"Response from ChatAnthropic: {response_anthropic}")
+  # Test anthropic
+  llm_anthropic = ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0)
+  response_anthropic = llm_anthropic.invoke("Say 'setup complete!' in one word").content
+  print(f"Response from ChatAnthropic: {response_anthropic}")
 
-    print("Setup complete!")
+  print("Setup complete!")
 
 
 if __name__ == "__main__":
-    main()
+  main()

@@ -3,31 +3,20 @@
 # text-embedding-3-large	3072	    $0.13	                High accuracy
 # text-embedding-ada-002	1536	    $0.10	                Legacy
 
-from langchain_openai.embeddings import OpenAIEmbeddings
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from dotenv import load_dotenv
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 load_dotenv()
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2") # 384 dimensions
+embeddings = HuggingFaceEmbeddings(
+  model_name="sentence-transformers/all-MiniLM-L6-v2"
+)  # 384 dimensions
 
 
-# Ollama 
+# Ollama
 from langchain_ollama import OllamaEmbeddings
+
 embeddings = OllamaEmbeddings(model="llama2-7b-embedding-q4_0")
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
