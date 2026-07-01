@@ -3,6 +3,8 @@ langchain-core
 langgraph
 langchain-openai
 langchain-anthropic
+anthropic
+langsmith
 python-dotenv
 openai
 rich

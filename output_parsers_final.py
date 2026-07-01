@@ -18,6 +18,10 @@ load_dotenv()
 model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 
+def print_description(text):
+    print(f"\n\033[94m{'***'} {text} {'***'}\033[0m\n")
+
+
 def demo_str_parser():
     """Basic string output parser."""
 
@@ -25,11 +29,10 @@ def demo_str_parser():
         "Give me a one-word answer: What color is the sky?"
     )
     parser = StrOutputParser()
-
     chain = prompt | model | parser
 
     result = chain.invoke({})
-    print(f"Result: '{result}' (type: {type(result).__name__})")
+    print(f"Result Sky's color: '{result}' (type: {type(result).__name__})")
 
 
 def demo_json_parser():
@@ -40,13 +43,12 @@ def demo_json_parser():
         "Return ONLY valid JSON, no explanation."
     )
     parser = JsonOutputParser()
-
     chain = prompt | model | parser
 
-    result = chain.invoke({"place": "The Eiffel Tower"})
-    print(f"Result: {result}")
-    print(f"City: {result['city']}, Country: {result['country']}")
-
+    place = "The Eiffel Tower"
+    result = chain.invoke({"place": place})
+    print(f"Place: {place}\nResult: {result}")
+    print(f"City: {result['city']}, Country: {result['country']}\n\n")
 
 def demo_pydantic_parser():
     """Pydantic output parser for type-safe structured data."""
@@ -59,11 +61,9 @@ def demo_pydantic_parser():
         difficulty: str = Field(description="easy, medium, or hard")
 
     parser = PydanticOutputParser(pydantic_object=Recipe)
-
     prompt = ChatPromptTemplate.from_template(
         "Create a simple recipe for: {dish}\n\n{format_instructions}"
     ).partial(format_instructions=parser.get_format_instructions())
-
     chain = prompt | model | parser
 
     result = chain.invoke({"dish": "scrambled eggs"})
@@ -90,17 +90,16 @@ def demo_structured_output():
         assignee: Optional[str] = Field(description="Person assigned if mentioned")
 
     # Bind schema to model
-    structured_model = model.with_structured_output(TaskExtraction)
-
-    # No need for format instructions - it's automatic
     prompt = ChatPromptTemplate.from_template("Extract task information from: {text}")
-
+    structured_model = model.with_structured_output(TaskExtraction)
+    # No need for format instructions - it's automatic
     chain = prompt | structured_model
 
     texts = [
         "John needs to finish the report by Friday - it's urgent",
         "We should update the docs sometime next week",
         "Critical: Fix the login bug ASAP",
+        "Assign the new AI feature to Alice and Bob before the end of the month",
     ]
 
     print("Task Extractions:")
@@ -127,18 +126,15 @@ def demo_complex_schema():
         employee_count: int
         headquarters: Address
         products: List[str]
-
-    structured_model = model.with_structured_output(Company)
-
     prompt = ChatPromptTemplate.from_template(
         "Extract company information from: {text}"
     )
-
+    structured_model = model.with_structured_output(Company)
     chain = prompt | structured_model
 
     result = chain.invoke(
         {
-            "text": "Apple Inc. is a tech company with 160,000 employees based in "
+            "Apple Inc. is a tech company with 160,000 employees based in "
             "Cupertino, California, USA. They make iPhones, MacBooks, and iPads."
         }
     )
@@ -172,12 +168,10 @@ def exercise_structured_extraction():
         genre: str = Field(description="Primary genre")
         rating: int = Field(description="Rating from 1-10", ge=1, le=10)
 
-    structured_model = model.with_structured_output(Movie)
-
     prompt = ChatPromptTemplate.from_template(
-        "Extract movie information from this review:\n\n{review}"
+        "Extract movie information from this review:\n{review}"
     )
-
+    structured_model = model.with_structured_output(Movie)
     chain = prompt | structured_model
 
     result = chain.invoke(
@@ -197,32 +191,20 @@ def exercise_structured_extraction():
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("Demo 1: String Parser")
-    print("=" * 50)
+    print_description("StrOutputParser — returns plain string output")
     demo_str_parser()
 
-    print("\n" + "=" * 50)
-    print("Demo 2: JSON Parser")
-    print("=" * 50)
+    print_description("JsonOutputParser — parses model output into a Python dict")
     demo_json_parser()
 
-    print("\n" + "=" * 50)
-    print("Demo 3: Pydantic Parser")
-    print("=" * 50)
+    print_description("PydanticOutputParser — validates and returns a typed Pydantic model")
     demo_pydantic_parser()
 
-    print("\n" + "=" * 50)
-    print("Demo 4: Structured Output (Modern)")
-    print("=" * 50)
+    print_description("with_structured_output() — modern structured output, no format instructions needed")
     demo_structured_output()
 
-    print("\n" + "=" * 50)
-    print("Demo 5: Complex Schema")
-    print("=" * 50)
+    print_description("Complex nested schema with with_structured_output()")
     demo_complex_schema()
 
-    print("\n" + "=" * 50)
-    print("Exercise: Movie Extraction")
-    print("=" * 50)
+    print_description("Exercise: Movie structured extraction using with_structured_output()")
     exercise_structured_extraction()
