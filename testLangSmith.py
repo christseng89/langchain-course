@@ -1,13 +1,17 @@
 import os
+import time
+import uuid
 import anthropic
 from dotenv import load_dotenv
-from langsmith import traceable
+from langsmith import traceable, Client
 
 load_dotenv()
 
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
 client = anthropic.Anthropic()
+langsmith_client = Client()
+PROJECT_NAME = os.environ.get("LANGSMITH_PROJECT") or os.environ.get("LANGCHAIN_PROJECT", "default")
 
 tools = [
     {
@@ -31,6 +35,8 @@ WEATHER_DATA = {
     "New York": "Sunny, 75°F",
     "London": "Rainy, 55°F",
     "Tokyo": "Clear, 68°F",
+    "Taipei": "Cloudy, 80°F",
+    "Nanjing": "Sunny, 85°F",
 }
 
 
@@ -69,6 +75,43 @@ def run_weather_agent(query: str) -> str:
         messages.append({"role": "user", "content": tool_results})
 
 
+def print_trace_runs(trace_id: uuid.UUID, timeout: float = 15.0) -> None:
+    """Fetch and print every run LangSmith captured for a trace.
+
+    Ingestion is asynchronous, so a just-finished trace may not be queryable
+    yet -- flush the pending run and poll briefly until it shows up.
+    """
+    langsmith_client.flush()
+
+    deadline = time.monotonic() + timeout
+    runs = []
+    while time.monotonic() < deadline:
+        runs = list(langsmith_client.list_runs(project_name=PROJECT_NAME, trace_id=trace_id))
+        if runs and all(run.end_time is not None for run in runs):
+            break
+        time.sleep(1)
+
+    if not runs:
+        print(f"No runs found for trace {trace_id} (project={PROJECT_NAME}).")
+        return
+
+    runs.sort(key=lambda r: r.start_time)
+    print(f"\nLangSmith trace {trace_id} — {len(runs)} run(s):")
+    for run in runs:
+        latency = f"{(run.end_time - run.start_time).total_seconds():.2f}s" if run.end_time else "n/a"
+        print(
+            f"  - {run.name:<20} type={run.run_type:<10} status={run.status} "
+            f"latency={latency} tokens={run.total_tokens} error={run.error}"
+        )
+
+
 if __name__ == "__main__":
-    result = run_weather_agent("What's the weather like in San Francisco and Tokyo?")
+    trace_id = uuid.uuid4()
+    result = run_weather_agent(
+        "What's the weather like in Taipei, Nanjing, San Francisco and Tokyo?",
+        langsmith_extra={"run_id": trace_id, "client": langsmith_client},
+    )
     print(result)
+
+    print("\n⏳ Waiting for LangSmith to ingest the trace...")
+    print_trace_runs(trace_id)
