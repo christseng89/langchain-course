@@ -3,6 +3,8 @@ Understanding Chains in LangChain V.1
 LCEL patterns, composition, and debugging
 """
 
+from operator import itemgetter
+
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
@@ -13,6 +15,7 @@ from langchain_core.runnables import (
   RunnableParallel,
   RunnablePassthrough,
 )
+from langsmith import traceable
 
 load_dotenv()
 
@@ -24,10 +27,10 @@ def print_section(title):
   print(f"\n\033[94m{'=' * 50}\n{title}\n{'=' * 50}\033[0m")
 
 
+@traceable(name="demo_basic_chain", run_type="chain")
 def demo_basic_chain():
   prompt = ChatPromptTemplate.from_template("Summarize the following text in one sentence: {text}")
   parser = StrOutputParser()
-
   chain = prompt | model | parser
 
   result = chain.invoke(
@@ -36,6 +39,7 @@ def demo_basic_chain():
   print(f"Summary: {result}  ")
 
 
+@traceable(name="demo_parallel_chain", run_type="chain")
 def demo_parallel_chain():
   """Run multiple chains in parallel."""
   # define individual chains
@@ -49,8 +53,8 @@ def demo_parallel_chain():
 
   parser = StrOutputParser()
 
-  # Parallel execution
-  analysis_chain = RunnableParallel(
+  # Parallel chain execution
+  chain = RunnableParallel(
     summary=summarize_prompt | model | parser,
     keywords=keywords_prompt | model | parser,
     sentiment=sentiment_prompt | model | parser,
@@ -63,16 +67,17 @@ def demo_parallel_chain():
     launch has been a massive success with record-breaking adoption rates.
     """
 
-  results = analysis_chain.invoke({"text": text})
-  print("Analysis Results:")
-  print("Parallel Analysis Results:")
-  print(f"  Summary: {results['summary']}")
-  print(f"  Keywords: {results['keywords']}")
-  print(f"  Sentiment: {results['sentiment']}")
+  results = chain.invoke({"text": text})
+  print("Parallel Chain Analysis Results:\n")
+  print(f"- Summary: {results['summary']}\n")
+  print(f"- Keywords: {results['keywords']}\n")
+  print(f"- Sentiment: {results['sentiment']}\n")
 
 
+@traceable(name="demo_passthrough_chain", run_type="chain")
 def demo_passthrough_chain():
-  """A chain that demonstrates passthrough functionality."""
+  """A chain that demonstrates passthrough functionality, comparing
+  RunnablePassthrough (needs an unwrap step) vs itemgetter (doesn't)."""
   prompt = ChatPromptTemplate.from_template(
     "Original question: {question}\nContext: {context}\n\nAnswer the question based on the context."
   )
@@ -92,8 +97,22 @@ def demo_passthrough_chain():
   result = chain.invoke({"question": "Who created LangChain?"})
   print(f"Answer: {result}")
 
+  # Easier way: use itemgetter to extract the question from the input dict
+  print_section("Passthrough Chain (itemgetter)")
 
-def demo_chain_branching():
+  chain = (
+    RunnableParallel(context=RunnableLambda(fake_retriever), question=itemgetter("question"))
+    | prompt
+    | model
+    | StrOutputParser()
+  )
+
+  result = chain.invoke({"question": "Who created LangChain?"})
+  print(f"Answer: {result}")
+
+
+@traceable(name="demo_parallel_chain_branching", run_type="chain")
+def demo_parallel_chain_branching():
   """A chain that demonstrates branching functionality."""
 
   # Different prompts for different intents
@@ -104,14 +123,17 @@ def demo_chain_branching():
   classifier_prompt = ChatPromptTemplate.from_template(
     "Classify this as 'code' or 'general': {input}\nReturn only the classification."
   )
-  classifer = classifier_prompt | model | StrOutputParser()
+  classifer_chain = classifier_prompt | model | StrOutputParser()
 
   # Branching chain  based on classification
   def is_code_question(input_dict):
-    classification = classifer.invoke(input_dict)
+    classification = classifer_chain.invoke(input_dict)
+    print(f"\nClassification: {classification}")
+    print(f"Input: {input_dict['input']}")
+    print(f"Is code question? {'code' in classification.lower()}\n")
     return "code" in classification.lower()
 
-  branch = RunnableBranch(
+  branch_chain = RunnableBranch(
     (is_code_question, code_prompt | model | StrOutputParser()),
     general_prompt | model | StrOutputParser(),  # default branch
   )
@@ -121,13 +143,34 @@ def demo_chain_branching():
     "How do I write a for loop in Python?",
     "What's the weather like today?",
   ]
-  for q in questions:
-    result = branch.invoke({"input": q})
-    print(f"Q: {q}")
+  for question in questions:
+    result = branch_chain.invoke({"input": question})
+    print(f"Q: {question}")
+    print(f"A: {result[:100]}...\n")
+
+  # One more test with a different question # Alternative condition: cheap keyword heuristic instead of an LLM classifier call
+  def looks_like_code_question(input_dict):
+    keywords = ("code", "function", "python", "loop", "bug", "error", "programming")
+    print(f"\nInput: {input_dict['input']}")
+    print(
+      f"Looks like code question? {any(keyword in input_dict['input'].lower() for keyword in keywords)}\n"
+    )
+    return any(keyword in input_dict["input"].lower() for keyword in keywords)
+
+  print_section("Parallel Chain Branching (Alternative Condition)")
+  branch_chain = RunnableBranch(
+    (looks_like_code_question, code_prompt | model | StrOutputParser()),
+    general_prompt | model | StrOutputParser(),  # default branch
+  )
+
+  for question in questions:
+    result = branch_chain.invoke({"input": question})
+    print(f"Q: {question}")
     print(f"A: {result[:100]}...\n")
 
 
-def demo_debbuging():
+@traceable(name="demo_debugging", run_type="chain")
+def demo_debugging():
   prompt = ChatPromptTemplate.from_template("Say hello to {name}")
   chain = prompt | model | StrOutputParser()
 
@@ -162,17 +205,17 @@ def demo_debbuging():
 
 
 if __name__ == "__main__":
-  print_section("Basic Chain")
-  demo_basic_chain()
+  # print_section("Basic Chain")
+  # demo_basic_chain()
 
-  print_section("Parallel Chain")
-  demo_parallel_chain()
+  # print_section("Parallel Chain")
+  # demo_parallel_chain()
 
-  print_section("Passthrough Chain")
-  demo_passthrough_chain()
+  # print_section("Passthrough Chain")
+  # demo_passthrough_chain()
 
-  print_section("Chain Branching")
-  demo_chain_branching()
+  print_section("Parallel Chain Branching")
+  demo_parallel_chain_branching()
 
-  print_section("Debugging")
-  demo_debbuging()
+  # print_section("Debugging")
+  # demo_debugging()
