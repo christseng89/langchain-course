@@ -4,6 +4,7 @@ Optimizing document chunks for RAG
 """
 
 from dotenv import load_dotenv
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import (
   Language,
   MarkdownHeaderTextSplitter,
@@ -11,6 +12,12 @@ from langchain_text_splitters import (
 )
 
 load_dotenv()
+
+
+def print_section(title):
+  """Print a section header in blue."""
+  print(f"\n\033[94m{'=' * 50}\n{title}\n{'=' * 50}\033[0m")
+
 
 # Sample documents for testing
 SAMPLE_TEXT = """# Introduction to Machine Learning
@@ -43,6 +50,7 @@ Machine learning is used in many fields:
 3. Recommendation systems
 4. Fraud detection
 5. Autonomous vehicles
+6. Healthcare diagnostics
 """.strip()
 
 SAMPLE_CODE = '''
@@ -83,62 +91,85 @@ def binary_search(arr, target):
 '''
 
 
-def recursive_splitter():
+# Recursive Character Text Splitter example
+def recursive_splitter(text=SAMPLE_TEXT):
+  chunk_size = 500
+  chunk_overlap = 50
   splitter = RecursiveCharacterTextSplitter(
-    chunk_size=500,
-    chunk_overlap=50,
+    chunk_size=chunk_size,
+    chunk_overlap=chunk_overlap,
     separators=["\n\n", "\n", " ", ""],
   )
-  chunks = splitter.split_text(SAMPLE_TEXT)
+  chunks = splitter.split_text(text)
 
-  print(f"Original length: {len(SAMPLE_TEXT)} chars")
+  print(f"Type of Text: {type(text)}")
+  print(f"Original length: {len(text)} chars")
+  print(f"Chunk size: {chunk_size} chars, Overlap: {chunk_overlap} chars\n")
+
   print(f"Number of chunks: {len(chunks)}")
-  print(f"Chunk sizes: {[len(c) for c in chunks]}")
+  print(f"Split chunk sizes: {[len(c) for c in chunks]}")
   print(f"\nFirst chunk preview:\n{chunks[0][:200]}...")
 
 
-def chunk_size_comparison():
+# Chunk Size Comparison example
+def chunk_size_comparison(text=SAMPLE_TEXT):
   sizes = [200, 500, 1000]
 
-  print("=== Chunk Size Comparison ===")
+  print(f"Type of Text: {type(text)}")
+  print(f"SAMPLE TEXT size: {len(text)} chars\n")
   for size in sizes:
     splitter = RecursiveCharacterTextSplitter(
       chunk_size=size, chunk_overlap=size // 5
     )  # 20% overlap
-    chunks = splitter.split_text(SAMPLE_TEXT)
+    chunks = splitter.split_text(text)
     print(f" Size {size}: {len(chunks)} chunks")
+    print(f" Split chunk sizes: {[len(c) for c in chunks]}")
+    print(f" Total chars across chunks: {sum(len(c) for c in chunks)}\n")
 
 
+# Overlap importance demonstration
 def overlap_importance():
   text = "The quick brown fox jumps over the lazy dog. " * 10  # Repeated text
 
   # without overlap
-  no_overlap = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
+  splitter_no_overlap = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=0)
 
   # with overlap
-  with_overlap = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=20)
+  splitter_overlap = RecursiveCharacterTextSplitter(chunk_size=50, chunk_overlap=20)
 
-  chunks_no_overlap = no_overlap.split_text(text)
-  chunks_with_overlap = with_overlap.split_text(text)
+  chunks_no_overlap = splitter_no_overlap.split_text(text)
+  chunks_with_overlap = splitter_overlap.split_text(text)
+
+  print(f"Type of Text: {type(text)}")
+  print(f"Original length: {len(text)} chars\n")
 
   print("Without overlap:")
   print(f"  Chunk 1 end: ...{chunks_no_overlap[0][-20:]}")
   print(f"  Chunk 2 start: {chunks_no_overlap[1][:20]}...")
+  print(f"  Number of Chunks: {len(chunks_no_overlap)}")
+  print(f"  Split chunk sizes: {[len(c) for c in chunks_no_overlap]}")
 
   print("\nWith overlap:")
   print(f"  Chunk 1 end: ...{chunks_with_overlap[0][-20:]}")
   print(f"  Chunk 2 start: {chunks_with_overlap[1][:20]}...")
+  print(f"  Number of Chunks: {len(chunks_with_overlap)}")
+  print(f"  Split chunk sizes: {[len(c) for c in chunks_with_overlap]}")
 
 
-def markdown_splitter():
+# Markdown Header Text Splitter example
+def markdown_splitter(text=SAMPLE_TEXT):
   headers_to_consider = [
     ("#", "h1"),
     ("##", "h2"),
     ("###", "h3"),
+    ("####", "h4"),
+    ("#####", "h5"),
+    ("######", "h6"),
   ]
   splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_consider)
-  chunks = splitter.split_text(SAMPLE_TEXT)
+  chunks = splitter.split_text(text)
 
+  print(f"Type of Text: {type(text)}")
   print(f"Markdown Splitter produced {len(chunks)} chunks.")
   for i, chunk in enumerate(chunks):
     print(f"--- Chunk {i} ---")
@@ -146,44 +177,51 @@ def markdown_splitter():
     print(f" Content: {chunk.page_content[:200]}...\n")
 
 
-def code_splitter():
+# Code Splitter example => Language.PYTHON
+def code_splitter(text=SAMPLE_CODE):
   python_splitter = RecursiveCharacterTextSplitter.from_language(
     language=Language.PYTHON, chunk_size=500, chunk_overlap=50
   )
-  chunks = python_splitter.split_text(SAMPLE_CODE)
+  chunks = python_splitter.split_text(text)
+
+  print(f"Type of Text: {type(text)}")
+  print(f"Code Length: {len(text)} chars")
   print(f"Code Splitter produced {len(chunks)} chunks.")
   for i, chunk in enumerate(chunks):
     print(f"\nChunk {i} ({len(chunk)} chars):")
     print(chunk[:150] + "..." if len(chunk) > 150 else chunk)
 
 
-def document_splitter():
-  from langchain_community.document_loaders import PyPDFLoader
-
-  loader = PyPDFLoader("./docs/langchain_demo.pdf")
-  docs = loader.load()
-
-  print(f"Loaded {len(docs)} documents from PDF.")
-
+# Document Splitter from PDF example
+def document_splitter(filename="./docs/langchain_demo.pdf"):
+  text = PyPDFLoader(filename).load()
   splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-
   # split the docs
-  split_docs = splitter.split_documents(docs)
+  chunks = splitter.split_documents(text)
 
-  print(f"Split into {len(split_docs)} chunks")
-  print(f"\nFirst chunk metadata: {split_docs[0].metadata}")
-  print(f"First chunk content: {split_docs[0].page_content[:200]}...")
-  print(f"\nLast chunk metadata: {split_docs[-1].metadata}")
+  print(f"Type of Text: {type(text)}")
+  print(f"Loaded {len(text)} documents from PDF {filename}.")
+  print(f"Split into {len(chunks)} chunks")
+  print(f"\nFirst chunk metadata: {chunks[0].metadata}")
+  print(f"First chunk content: {chunks[0].page_content[:200]}...")
+  print(f"\nLast chunk metadata: {chunks[-1].metadata}")
 
 
 if __name__ == "__main__":
-  # print("=== Recursive Character Text Splitter ===")
-  # recursive_splitter()
-  # chunk_size_comparison()
-  # overlap_importance()
-  # print("=== Markdown Header Text Splitter ===")
-  # markdown_splitter()
-  # print("=== Code Splitter ===")
-  # code_splitter()
-  print("=== Document Splitter from PDF ===")
-  document_splitter()
+  print_section("Recursive Character Text Splitter")
+  recursive_splitter(SAMPLE_TEXT)
+
+  print_section("Chunk Size Comparison")
+  chunk_size_comparison(SAMPLE_TEXT)
+
+  print_section("Overlap Importance Demonstration")
+  overlap_importance()
+
+  print_section("Markdown Splitter")
+  markdown_splitter(SAMPLE_TEXT)
+
+  print_section("Code Splitter")
+  code_splitter(SAMPLE_CODE)
+
+  print_section("Document Splitter from PDF")
+  document_splitter("./docs/langchain_demo.pdf")
