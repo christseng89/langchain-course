@@ -1,53 +1,64 @@
 import numpy as np
 from dotenv import load_dotenv
 from langchain_openai.embeddings import OpenAIEmbeddings
-from ollama import embeddings
 
 load_dotenv()
 
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+print(f"\033[92m\nEmbedding model: {embeddings_model.model}\033[0m")
+
+# Documents
+DOCS = [
+  "Python is a programming language",
+  "JavaScript is used for web development",
+  "Machine learning enables AI applications",
+  "Deep learning uses neural networks",
+  "Cats are popular pets",
+]
+
+
+def print_section(title):
+  """Print a section header in blue."""
+  print(f"\n\033[94m{'=' * 60}\n{title}\n{'=' * 60}\033[0m")
 
 
 def basic_embeddings():
+  print_section("BASIC EMBEDDINGS")
 
   # single text
   text = "What is Machine Learning?"
-  single_embedding = embeddings.embed_query(text)
+  single_embedding = embeddings_model.embed_query(text)
   print(f"Vector dimensions: {len(single_embedding)}")
   print(f"First 5 values: {single_embedding[:5]}")
   print(f"Vector norm: {np.linalg.norm(single_embedding):.4f}")
 
 
 def batch_embeddings():
+  print_section("BATCH EMBEDDINGS")
+
   text = [
     "What is Machine Learning?",
     "Explain the concept of overfitting in ML.",
     "How does a neural network work?",
   ]
 
-  batch_embedding = embeddings.embed_documents(text)
+  batch_embedding = embeddings_model.embed_documents(text)
   for i, emb in enumerate(batch_embedding):
-    print(f"Text {i + 1} - Vector dimensions: {len(emb)}")
-    print(f"Text {i + 1} - First 5 values: {emb[:5]}")
-    print(f"Text {i + 1} - Vector norm: {np.linalg.norm(emb):.4f}")
+    print(f"Text {i + 1}")
+    print(f" Vector dimensions: {len(emb)}")
+    print(f" First 5 values: {emb[:5]}")
+    print(f" Vector norm: {np.linalg.norm(emb):.4f}\n")
+    # 把每個維度的值平方、加總、再開根號。
+    # OpenAI 的 embedding 向量通常已經正規化（normalized）， norm 應該接近 1.0。
 
 
 def similarity_search():
-
-  # Documents
-
-  docs = [
-    "Python is a programming language",
-    "JavaScript is used for web development",
-    "Machine learning enables AI applications",
-    "Deep learning uses neural networks",
-    "Cats are popular pets",
-  ]
+  print_section("SIMILARITY SEARCH")
 
   query = "What programming languages exist?"
 
   # embed documents and query
-  doc_vector = embeddings_model.embed_documents(docs)
+  doc_vector = embeddings_model.embed_documents(DOCS)
   query_vector = embeddings_model.embed_query(query)
 
   # compute cosine similarities
@@ -57,7 +68,7 @@ def similarity_search():
   similarities = [cosine_similarity(query_vector, doc_vec) for doc_vec in doc_vector]
 
   # rank documents by similarity
-  ranked_docs = sorted(zip(docs, similarities), key=lambda x: x[1], reverse=True)
+  ranked_docs = sorted(zip(DOCS, similarities), key=lambda x: x[1], reverse=True)
 
   print(f"Query: {query}\n")
   print("Ranked by similarity:")
@@ -67,25 +78,28 @@ def similarity_search():
 
 # Caching ---
 def embedding_caching():
+  print_section("EMBEDDING CACHING")
+
   import tempfile
 
   from langchain_classic.embeddings.cache import CacheBackedEmbeddings
   from langchain_classic.storage import LocalFileStore
 
   with tempfile.TemporaryDirectory() as tempdir:
-    store = LocalFileStore(root_path=tempdir)
+    local_store = LocalFileStore(root_path=tempdir)
 
     cached_embeddings = CacheBackedEmbeddings.from_bytes_store(
       underlying_embeddings=embeddings_model,
-      document_embedding_cache=store,
+      document_embedding_cache=local_store,
       namespace="exercise",
+      key_encoder="sha256",
     )
 
     text = "What is Reinforcement Learning?"
 
     # First call - hits API
     print("First call (API):")
-    vectors1 = cached_embeddings.embed_documents([text])
+    vectors1 = embeddings_model.embed_documents([text])
     print(f"  Embedded {len(vectors1)} documents")
 
     # Second call - from cache
@@ -98,7 +112,7 @@ def embedding_caching():
 
 
 if __name__ == "__main__":
-  # batch_embeddings()
-  # basic_embeddings()
-  # similarity_search()
+  basic_embeddings()
+  batch_embeddings()
+  similarity_search()
   embedding_caching()
