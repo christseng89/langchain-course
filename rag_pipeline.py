@@ -14,12 +14,12 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import OpenAIEmbeddings
-from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field
 
 load_dotenv()
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+print(f"\033[93m\nEmbedding model: {embeddings_model.model}\033[0m")
 
 # Sample knowledge base
 KNOWLEDGE_BASE = """# LangChain Framework
@@ -56,12 +56,34 @@ Install with: pip install langchain langchain-openai
 Create your first chain in under 10 lines of code.
 """
 llm = init_chat_model(model="gpt-4o-mini", temperature=0.2)
+print(f"\033[93mLLM model: {llm.model_name}\033[0m")
+
+
+def print_section(title):
+  print(f"\n\033[94m{'=' * 50}\n{title}\n{'=' * 50}\033[0m")
+
+
+CONCISE_INSTRUCTIONS = """Make sure to answer in a concise manner,
+and if you don't know the answer, just say "I don't know."""
+
+
+def format_docs(docs):
+  return "\n\n".join(doc.page_content for doc in docs)
+
+
+def format_docs_with_sources(docs):
+  formatted = []
+  for i, doc in enumerate(docs):
+    source = doc.metadata.get("source", "unknown")
+    formatted.append(f"[{i + 1}] {source}:\n{doc.page_content}")
+  return "\n\n".join(formatted)
 
 
 def create_kb():
   """Create a vector store from knowledge base."""
 
   # split the knowledge base into chunks
+  print("\033[93mCreating Vector Store from Knowledge Base\033[0m")
   splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
   doc = Document(page_content=KNOWLEDGE_BASE, metadata={"source": "langchain_knowledge_base.md"})
 
@@ -76,34 +98,38 @@ def create_kb():
   return vector_store
 
 
+# Create a global vector store for the knowledge base
+VECTOR_STORE = create_kb()
+
+
+# Basic RAG Demo
 def demo_basic_rag():
 
-  vector_store = create_kb()
-  retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 2})
-
+  # Retriever
+  retriever = VECTOR_STORE.as_retriever(search_type="similarity", search_kwargs={"k": 2})
   # RAG Prompt Template
   prompt = ChatPromptTemplate.from_template(
-    """
+    f"""
 Answer the question based only on the following context:
 
-{context}
+{{context}}
 
-Question: {question}
+Question: {{question}}
 
 Answer:
 
 
-Make sure to answer in a concise manner, 
-and if you don't know the answer, just say "I don't know."""
+{CONCISE_INSTRUCTIONS}"""
   )
-
-  # Format retrieved docs
-  def format_docs(docs):
-    return "\n\n".join([doc.page_content for doc in docs])
 
   # Rag chain
   rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    {
+      "context": retriever | format_docs,
+      # Context is 先 retriever，再 format_docs 的結果。
+      # context = format_docs(retriever(question))
+      "question": RunnablePassthrough(),  # Question is passed through as-is
+    }
     | prompt
     | llm
     | StrOutputParser()
@@ -115,38 +141,36 @@ and if you don't know the answer, just say "I don't know."""
     "What is LangChain?",
     "Who created LangChain?",
     "What is LangGraph used for?",
+    "What is LangSmith?",
+    "What is the pricing for LangSmith?",
+    "What is Claude?",
   ]
 
-  print("Basic RAG Demo:\n")
   for q in questions:
     answer = rag_chain.invoke(q)
-    print(f"Q: {q}")
+    print(f"\033[92mQ: {q}\033[0m")
     print(f"A: {answer}\n")
 
 
+# RAG with Sources Demo
 def demo_rag_with_sources():
 
-  vectorstore = create_kb()
-  retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-
+  # vectorstore = create_kb()
+  retriever = VECTOR_STORE.as_retriever(search_kwargs={"k": 3})
   prompt = ChatPromptTemplate.from_template(
-    """
+    f"""
 Answer the question based on the context below. Include which sources you used.
 
 Context:
-{context}
+{{context}}
 
-Question: {question}
+Question: {{question}}
 
-Answer (include sources):"""
+Answer (include sources):
+
+
+{CONCISE_INSTRUCTIONS}"""
   )
-
-  def format_docs_with_sources(docs):
-    formatted = []
-    for i, doc in enumerate(docs):
-      source = doc.metadata.get("source", "unknown")
-      formatted.append(f"[{i + 1}] {source}:\n{doc.page_content}")
-    return "\n\n".join(formatted)
 
   rag_chain = (
     {
@@ -158,32 +182,51 @@ Answer (include sources):"""
     | StrOutputParser()
   )
 
-  print("RAG with Sources:\n")
-  answer = rag_chain.invoke("What are the core components of LangChain?")
-  print("Q: What are the core components?\n")
-  print(f"A: {answer}")
+  questions = [
+    "What are the core components of LangChain?",
+    "What is LangGraph used for?",
+    "What is the pricing for LangSmith?",
+    "What is Claude Code?",
+  ]
+
+  for q in questions:
+    answer = rag_chain.invoke(q)
+    print(f"\033[92mQ: {q}\033[0m")
+    print(f"A: {answer}\n")
 
 
+# RAG with Fallback Demo
 def demo_rag_with_fallback():
-
-  vectorstore = create_kb()
-  retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+  retriever = VECTOR_STORE.as_retriever(search_kwargs={"k": 2})
 
   prompt = ChatPromptTemplate.from_template(
+    f"""
+Answer the question based ONLY on the following context.
+
+{CONCISE_INSTRUCTIONS}
+
+Context:
+{{context}}
+
+Question: {{question}}
+
+Answer:
+"""
+  )
+
+  # Same prompt without CONCISE_INSTRUCTIONS, to compare fallback behavior
+  prompt1 = ChatPromptTemplate.from_template(
     """
 Answer the question based ONLY on the following context.
-If the answer is not in the context, respond with: "I don't have information about that in my knowledge base."
 
 Context:
 {context}
 
 Question: {question}
 
-Answer:"""
+Answer:
+"""
   )
-
-  def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
 
   rag_chain = (
     {"context": retriever | format_docs, "question": RunnablePassthrough()}
@@ -192,7 +235,12 @@ Answer:"""
     | StrOutputParser()
   )
 
-  print("RAG with Fallback:\n")
+  rag_chain1 = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt1
+    | llm
+    | StrOutputParser()
+  )
 
   questions = [
     "What is the pricing for LangSmith?",  # In knowledge base
@@ -202,15 +250,17 @@ Answer:"""
 
   for q in questions:
     answer = rag_chain.invoke(q)
-    print(f"Q: {q}")
-    print(f"A: {answer}\n")
+    answer1 = rag_chain1.invoke(q)
+    print(f"\033[92mQ: {q}\033[0m")
+    print(f"A (with concise instructions): {answer}")
+    print(f"A (without concise instructions): {answer1}\n")
 
 
+# RAG with Structured Output Demo
 def demo_structured_rag():
   """RAG with structured output."""
 
-  vectorstore = create_kb()
-  retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+  retriever = VECTOR_STORE.as_retriever(search_kwargs={"k": 3})
 
   class RAGResponse(BaseModel):
     """Structured RAG response."""
@@ -218,39 +268,50 @@ def demo_structured_rag():
     answer: str = Field(description="The answer to the question")
     confidence: str = Field(description="high, medium, or low")
     sources_used: List[str] = Field(description="List of sources referenced")
-    follow_up: str = Field(description="Suggested follow-up question")
+    follow_up: List[str] = Field(description="Suggested follow-up question")
 
   structured_llm = llm.with_structured_output(RAGResponse)
 
   prompt = ChatPromptTemplate.from_template(
-    """
+    f"""
 Based on the context below, answer the question.
 
 Context:
-{context}
+{{context}}
 
-Question: {question}
+Question: {{question}}
 
-Provide a structured response."""
+Provide a structured response.
+
+
+{CONCISE_INSTRUCTIONS}"""
   )
 
-  def format_docs(docs):
-    return "\n\n".join(
-      f"[{doc.metadata.get('source', 'unknown')}]: {doc.page_content}" for doc in docs
-    )
-
   rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    {
+      "context": retriever
+      | format_docs_with_sources,  # Context is retrieved and formatted w sources
+      "question": RunnablePassthrough(),  # Question
+    }
     | prompt
     | structured_llm
   )
-  print("Structured RAG Demo:\n")
+
+  question = [
+    "What is LangGraph?",
+    "What are the core components of LangChain?",
+    "What is Claude Code?",
+  ]
+
   result = rag_chain.invoke("What is LangGraph?")
 
-  print(f"Answer: {result.answer}")
-  print(f"Confidence: {result.confidence}")
-  print(f"Sources: {result.sources_used}")
-  print(f"Follow-up: {result.follow_up}")
+  for q in question:
+    result = rag_chain.invoke(q)
+    print(f"\033[92mQ: {q}\033[0m")
+    print(f"A: {result.answer}\n")
+    print(f"Confidence: {result.confidence}")
+    print(f"Sources: {result.sources_used}")
+    print(f"Follow-up: {result.follow_up}\n")
 
 
 # Exercise: Build a document Q&A system
@@ -281,17 +342,17 @@ def exercise_document_qa():
       self.llm = init_chat_model(model="gpt-4o-mini", temperature=0.2)
 
       self.prompt = ChatPromptTemplate.from_template(
-        """
+        f"""
 Answer based on the context. Rate your confidence (high/medium/low).
 
-Context: {context}
-Question: {question}
+Context: {{context}}
+Question: {{question}}
 
-Format: [Confidence: X] Answer"""
+Format: [Confidence: X] Answer
+
+
+{CONCISE_INSTRUCTIONS}"""
       )
-
-      def format_docs(docs):
-        return "\n".join(d.page_content for d in docs)
 
       self.chain = (
         {
@@ -314,10 +375,10 @@ Format: [Confidence: X] Answer"""
     The language is named after Monty Python, not the snake.
     """
 
-  qa = DocumentQA(test_doc, "python_facts")
+  qa = DocumentQA(test_doc, "python_facts")  # "python_facts" = source name
 
-  print("Document Q&A System:\n")
   questions = [
+    "What is Python?",
     "Who created Python?",
     "When was Python 3.12 released?",
     "Why is Python named Python?",
@@ -325,13 +386,22 @@ Format: [Confidence: X] Answer"""
 
   for q in questions:
     answer = qa.ask(q)
-    print(f"Q: {q}")
+    print(f"\033[92mQ: {q}\033[0m")
     print(f"A: {answer}\n")
 
 
 if __name__ == "__main__":
+  # print_section("Basic RAG Demo")
   # demo_basic_rag()
+
+  # print_section("RAG with Sources Demo")
   # demo_rag_with_sources()
-  # demo_rag_with_fallback()
+
+  print_section("RAG with Fallback Demo")
+  demo_rag_with_fallback()
+
+  # print_section("Structured RAGResponse Demo")
   # demo_structured_rag()
-  exercise_document_qa()
+
+  # print_section("Exercise: Document Q&A System")
+  # exercise_document_qa()
