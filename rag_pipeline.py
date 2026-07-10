@@ -55,8 +55,9 @@ LangChain itself is open source and free. LangSmith (the observability platform)
 Install with: pip install langchain langchain-openai
 Create your first chain in under 10 lines of code.
 """
-llm = init_chat_model(model="gpt-4o-mini", temperature=0.2)
-print(f"\033[93mLLM model: {llm.model_name}\033[0m")
+
+LLM = init_chat_model(model="gpt-4o-mini", temperature=0.2)
+print(f"\033[93mLLM model: {LLM.model_name}\033[0m")
 
 
 def print_section(title):
@@ -131,7 +132,7 @@ Answer:
       "question": RunnablePassthrough(),  # Question is passed through as-is
     }
     | prompt
-    | llm
+    | LLM
     | StrOutputParser()
   )
 
@@ -178,7 +179,7 @@ Answer (include sources):
       "question": RunnablePassthrough(),
     }
     | prompt
-    | llm
+    | LLM
     | StrOutputParser()
   )
 
@@ -231,14 +232,14 @@ Answer:
   rag_chain = (
     {"context": retriever | format_docs, "question": RunnablePassthrough()}
     | prompt
-    | llm
+    | LLM
     | StrOutputParser()
   )
 
   rag_chain1 = (
     {"context": retriever | format_docs, "question": RunnablePassthrough()}
     | prompt1
-    | llm
+    | LLM
     | StrOutputParser()
   )
 
@@ -270,7 +271,8 @@ def demo_structured_rag():
     sources_used: List[str] = Field(description="List of sources referenced")
     follow_up: List[str] = Field(description="Suggested follow-up question")
 
-  structured_llm = llm.with_structured_output(RAGResponse)
+  # Use the structured output LLM
+  structured_llm = LLM.with_structured_output(RAGResponse)
 
   prompt = ChatPromptTemplate.from_template(
     f"""
@@ -338,9 +340,6 @@ def exercise_document_qa():
       )
       self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": 3})
 
-      # Create chain
-      self.llm = init_chat_model(model="gpt-4o-mini", temperature=0.2)
-
       self.prompt = ChatPromptTemplate.from_template(
         f"""
 Answer based on the context. Rate your confidence (high/medium/low).
@@ -360,7 +359,7 @@ Format: [Confidence: X] Answer
           "question": RunnablePassthrough(),
         }
         | self.prompt
-        | self.llm
+        | LLM
         | StrOutputParser()
       )
 
@@ -382,6 +381,7 @@ Format: [Confidence: X] Answer
     "Who created Python?",
     "When was Python 3.12 released?",
     "Why is Python named Python?",
+    "What is Claude Code?",  # Not in document
   ]
 
   for q in questions:
@@ -391,17 +391,17 @@ Format: [Confidence: X] Answer
 
 
 if __name__ == "__main__":
-  # print_section("Basic RAG Demo")
-  # demo_basic_rag()
+  print_section("Basic RAG Demo")
+  demo_basic_rag()
 
-  # print_section("RAG with Sources Demo")
-  # demo_rag_with_sources()
+  print_section("RAG with Sources Demo")
+  demo_rag_with_sources()
 
   print_section("RAG with Fallback Demo")
   demo_rag_with_fallback()
 
-  # print_section("Structured RAGResponse Demo")
-  # demo_structured_rag()
+  print_section("Structured RAGResponse Demo")
+  demo_structured_rag()
 
-  # print_section("Exercise: Document Q&A System")
-  # exercise_document_qa()
+  print_section("Exercise: Document Q&A System")
+  exercise_document_qa()
