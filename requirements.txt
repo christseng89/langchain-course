@@ -8,3 +8,4 @@ langsmith
 python-dotenv
 openai
 rich
+lark
