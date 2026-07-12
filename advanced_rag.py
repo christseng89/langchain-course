@@ -44,8 +44,12 @@ def print_section(title, subtitle=None):
   print(f"\n\033[94m{'=' * 60}\n{lines}\n{'=' * 60}\033[0m")
 
 
-CONCISE_INSTRUCTIONS = """Make sure to answer in a concise manner,
-and if you don't know the answer, just say "I don't know."""
+# CONCISE_INSTRUCTIONS = """Make sure to answer in a concise manner,
+# and if you don't know the answer, just say "I don't know."""
+
+CONCISE_INSTRUCTIONS = """Answer ONLY using the provided context. Do not use any outside knowledge.
+Be concise. If the context does not contain the answer, say "I don't know" — do not guess."""
+
 
 # Sample knowledge base for demos
 TECH_DOCS = [
@@ -110,6 +114,123 @@ TECH_DOCS = [
     metadata={"topic": "database", "type": "vector", "difficulty": "intermediate"},
   ),
 ]
+
+INFO_BURIED = [
+  Document(
+    page_content="""ACME AI SOLUTIONS - COMPANY HISTORY AND TECHNOLOGY STACK
+
+Founded in 2018 by three Stanford graduates, ACME AI Solutions began as a
+small consulting firm helping enterprises adopt machine learning. Our first
+office was a converted garage in Palo Alto, and we had just two laptops and
+a dream. The early days were challenging - we survived on instant ramen and
+the occasional pizza from the client meetings.
+
+In 2019, we secured our first major contract with a Fortune 500 retailer,
+helping them build a recommendation engine. This led to rapid growth and we
+moved to a proper office space in San Francisco. By 2020, we had grown to
+50 employees and opened offices in Austin and Seattle.
+
+Our current technology stack has evolved significantly over the years. For
+backend services, we use Python and FastAPI. Our data pipeline runs on
+Apache Spark and Airflow. For frontend, we've standardized on React and
+TypeScript.
+
+LangChain is a framework for building LLM applications. It provides tools
+for prompts, chains, agents, and memory. LangChain supports multiple LLM
+providers including OpenAI, Anthropic, and local models like Llama.
+
+The company culture at ACME emphasizes work-life balance. We offer unlimited
+PTO, which most employees use for an average of 25 days per year. Our
+engineering teams follow agile methodology with two-week sprints.
+
+Our revenue has grown consistently, from $2M in 2019 to $45M in 2023. We
+project $70M for 2024, driven by our new enterprise AI platform. The company
+went through Series B funding in 2022, raising $80M at a $500M valuation.
+
+Employee benefits include comprehensive health insurance through Aetna, a
+401(k) with 4% matching, and a generous equity package.""",
+    metadata={"source": "acme_company_overview.pdf"},
+  ),
+  Document(
+    page_content="""ACME AI PLATFORM - TECHNICAL DOCUMENTATION v2.4
+
+Chapter 1: System Architecture Overview
+
+The ACME AI Platform is built on a microservices architecture deployed on
+AWS EKS (Elastic Kubernetes Service). Each microservice is containerized
+using Docker and orchestrated by Kubernetes. We use Istio as our service
+mesh for traffic management and observability.
+
+Our database layer consists of PostgreSQL for transactional data, Redis
+for caching, and Pinecone for vector storage. All databases are deployed
+in high-availability configurations with automatic failover.
+
+Chapter 2: Authentication and Authorization
+
+User authentication is handled through Auth0, supporting both SSO via SAML
+2.0 and OAuth 2.0 flows. We implement role-based access control (RBAC) with
+four default roles: Admin, Developer, Analyst, and Viewer.
+
+Chapter 3: AI Framework Integration
+
+LangGraph is a library for building stateful, multi-actor applications with
+LLMs. Key features include state management, cycles and loops, human-in-the-
+loop workflows, and persistence. LangGraph extends LangChain for complex
+agent architectures.
+
+Chapter 4: Monitoring and Logging
+
+We use DataDog for application performance monitoring (APM) and log
+aggregation. All services emit structured JSON logs that are collected and
+indexed for searching. Alert thresholds are configured for latency (p99 >
+500ms), error rates (> 1%), and resource utilization (CPU > 80%).
+
+Chapter 5: Disaster Recovery
+
+Our disaster recovery plan includes daily database backups stored in S3
+with cross-region replication. RTO is 4 hours, and RPO is 1 hour.""",
+    metadata={"source": "technical_docs_v2.4.pdf"},
+  ),
+]
+
+LONG_DOC = Document(
+  page_content="""
+# Complete Guide to Building AI Agents
+
+## Chapter 1: Introduction to AI Agents
+
+AI agents are autonomous systems that can perceive their environment, make decisions, and take actions to achieve goals. Unlike simple chatbots, agents can use tools, maintain state, and execute multi-step plans.
+
+The key components of an AI agent include:
+- A language model for reasoning
+- Tools for interacting with external systems
+- Memory for maintaining context
+- A planning mechanism for complex tasks
+
+## Chapter 2: Agent Frameworks
+
+Several frameworks exist for building AI agents:
+
+LangChain provides the foundational abstractions for chains and simple agents. It excels at straightforward tool-calling patterns and integrates with many LLM providers.
+
+LangGraph extends LangChain for complex, stateful agents. It introduces graph-based state management, enabling cycles, human-in-the-loop workflows, and persistent execution.
+
+CrewAI focuses on multi-agent collaboration, allowing teams of specialized agents to work together on complex tasks.
+
+## Chapter 3: Production Considerations
+
+Deploying agents to production requires careful attention to:
+- Error handling and fallbacks
+- Token usage optimization
+- Observability and tracing
+- Security and access control
+- State persistence and recovery
+
+LangSmith provides observability for LangChain/LangGraph applications, offering tracing, evaluation, and monitoring capabilities.
+        """,
+  metadata={"source": "ai_agents_guide.md"},
+)
+
 
 PAGE_CONTENT = """
 # Complete Guide to Building AI Agents
@@ -287,7 +408,8 @@ def demo_contextual_compression():
   query = "What frameworks exist for building LLM applications?"
   print(f"\n\033[92mQuery: {query}\n\033[0m")
 
-  vectorstore = create_base_vectorstore()
+  # Create a vector store with documents that have a lot of buried information
+  vectorstore = create_base_vectorstore(documents=INFO_BURIED, collection_name="compression_demo")
   answer_chain = build_answer_chain()
 
   # Without compression
@@ -347,6 +469,7 @@ def demo_ensemble_hybrid_search():
     "ACID transactions",  # Keyword-heavy (BM25 helps)
     "How do I store AI model outputs for later retrieval?",  # Semantic (vectors help)
     "fast similarity lookup for embeddings",  # Mixed
+    "What is BM25 in Chinese?",  # Keyword-heavy (BM25 helps)
     "What is Claude?",  # Semantic (vectors help)
   ]
 
@@ -359,12 +482,12 @@ def demo_ensemble_hybrid_search():
     semantic_results = semantic_retriever.invoke(query)
     ensemble_results = ensemble_retriever.invoke(query)
 
-    print(f"\nBM25 {len(bm25_results)} docs. Top result: {bm25_results[0].page_content[:60]}...")
+    print(f"\n1. BM25 {len(bm25_results)} docs. Top result: {bm25_results[0].page_content[:60]}...")
     print(
-      f"Semantic {len(semantic_results)} docs. Top result: {semantic_results[0].page_content[:60]}..."
+      f"2. Semantic {len(semantic_results)} docs. Top result: {semantic_results[0].page_content[:60]}..."
     )
     print(
-      f"Ensemble {len(ensemble_results)} docs. Top result: {ensemble_results[0].page_content[:60]}..."
+      f"3. Ensemble {len(ensemble_results)} docs. Top result: {ensemble_results[0].page_content[:60]}...\n"
     )
 
     # Generate an answer grounded in the ensemble results
@@ -379,10 +502,14 @@ def demo_parent_document_retriever():
 
   # Splitters
   parent_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
-  child_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=20)
+  child_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
 
   # Storage
-  vectorstore = create_base_vectorstore(documents=[], collection_name="parent_child_demo")
+  # ParentDocumentRetriever 要求 vectorstore 一開始是空的
+  vectorstore = create_base_vectorstore(
+    documents=[],
+    collection_name="parent_child_demo",
+  )
   store = InMemoryStore()
 
   # Create retriever
@@ -391,51 +518,63 @@ def demo_parent_document_retriever():
     docstore=store,
     child_splitter=child_splitter,
     parent_splitter=parent_splitter,
+    search_kwargs={"k": 3},
   )
 
   answer_chain = build_answer_chain()
-
-  # Long document to demonstrate parent/child splitting
-  long_doc = Document(
-    page_content=PAGE_CONTENT,
-    metadata={"source": "ai_agents_guide.md"},
-  )
-  # Add document
-  retriever.add_documents([long_doc])
 
   # Search
   questions = [
     "What is LangGraph used for?",
     "What are the key components of LangChain?",
-    # "What are the differences between LangChain and LangGraph?",
-    "What are the production considerations for deploying agents?",
+    "What are the differences between LangChain and LangGraph?",
+    # "What are the production considerations for deploying agents?",
     "What is Claude?",
   ]
+
+  # Info Buried and Long documents to demonstrate parent/child splitting
+  retriever.add_documents(INFO_BURIED)
+  retriever.add_documents([LONG_DOC])
 
   for query in questions:
     print(f"\n\033[92mQuery: {query}\n\033[0m")
 
     # Regular retrieval (would get small chunks)
-    child_docs = vectorstore.similarity_search(query, k=1)
-    print(f"\n\033[95m--- Child Chunk {len(child_docs)} docs (what search found) ---\033[0m")
-    print(
-      f"Child Content [0]: {len(child_docs[0].page_content)} chars, {child_docs[0].page_content}...\n"
-    )
+    child_docs = vectorstore.similarity_search(query, k=3)
+    print(f"\n\033[95m--- Child Chunks: {len(child_docs)} (what search found) ---\033[0m")
 
-    # Generate an answer grounded in the child chunk
-    answer = answer_from_docs(answer_chain, child_docs, query)
-    print(f"\n\033[93mChild Answer: {answer}\n\033[0m")
+    # Check child docs and their parent IDs
+    for index, doc in enumerate(child_docs, start=1):
+      doc_id = doc.metadata.get("doc_id")
+
+      print(
+        f"\n{index}. Doc ID: {doc_id}, Len: {len(doc.page_content)} chars"
+        f"\n   Content: {doc.page_content[:80]}..."
+      )
+
+    unique_doc_ids = {
+      doc.metadata.get("doc_id") for doc in child_docs if doc.metadata.get("doc_id") is not None
+    }
+
+    print(f"\033[38;5;208m\nChild Unique Doc IDs Len: {len(unique_doc_ids)}\033[0m")
+    print(f"\033[38;5;208mChild Unique Doc IDs: {unique_doc_ids}\n\033[0m")
 
     # Parent retrieval (gets full context)
     parent_docs = retriever.invoke(query)
-    print(f"\n\033[95m--- Parent Chunk {len(parent_docs)} docs (what's returned) ---\033[0m")
-    print(
-      f"Parent Content Preview: {len(parent_docs[0].page_content)} chars, {parent_docs[0].page_content[:300]}..."
-    )
+    print(f"\n\033[95m--- Parent Chunks: {len(parent_docs)} (what's returned) ---\033[0m")
+    # print(
+    #   f"Parent Content Preview: {len(parent_docs[0].page_content)} chars, {parent_docs[0].page_content[:300]}..."
+    # )
 
-    # Generate an answer grounded in the parent chunk
+    for index, doc in enumerate(parent_docs, start=1):
+      print(
+        f"\n{index}. Len: {len(doc.page_content)} chars"
+        f"\n   Content Preview: {doc.page_content[:80]}..."
+      )
+
+    # Generate an answer via the Pa
     answer = answer_from_docs(answer_chain, parent_docs, query)
-    print(f"\n\033[93mParent Answer: {answer}\033[0m")
+    print(f"\n\033[93mAnswer: {answer}\033[0m")
 
 
 # Complete RAG chain with advanced retrieval - Multi-query + Compression + RAG
@@ -443,14 +582,12 @@ def demo_parent_document_retriever():
 def demo_advanced_rag_chain():
   """Complete RAG chain with advanced retrieval."""
 
-  # Multi-query for better recall
-  multi_retriever = MultiQueryRetriever.from_llm(
-    retriever=create_base_vectorstore().as_retriever(search_kwargs={"k": 3}), llm=LLM
-  )
-
-  # Compression to focus on relevant info
+  # Multi-query for better recall => Compression to focus on relevant info
   advanced_retriever = ContextualCompressionRetriever(
-    base_compressor=LLMChainExtractor.from_llm(LLM), base_retriever=multi_retriever
+    base_compressor=LLMChainExtractor.from_llm(LLM),
+    base_retriever=MultiQueryRetriever.from_llm(
+      retriever=create_base_vectorstore().as_retriever(search_kwargs={"k": 3}), llm=LLM
+    ),
   )
 
   # RAG prompt
@@ -485,7 +622,7 @@ Answer:""",
   # Test
   questions = [
     "What options do I have for building AI agents?",
-    # "How can I store and search embeddings?",
+    "How can I store and search embeddings?",
     # "What is Claude and how does it compare to ChatGPT?",
     "What is BOLLETTT?",
   ]
