@@ -393,13 +393,21 @@ def exercise_persistent_memory():
 
   import os
 
+  from sqlalchemy import create_engine
+
   from langchain_community.chat_message_histories import SQLChatMessageHistory
 
   # Use SQLite for persistence
   db_path = "./chat_history.db"
 
+  # Single shared engine so we can dispose it (closes pooled connections)
+  # before deleting the file -- SQLChatMessageHistory(connection=<str>)
+  # creates a brand-new engine per call, and those are never released,
+  # which keeps the file locked on Windows.
+  engine = create_engine(f"sqlite:///{db_path}")
+
   def get_session_history(session_id: str) -> BaseChatMessageHistory:
-    return SQLChatMessageHistory(session_id=session_id, connection=f"sqlite:///{db_path}")
+    return SQLChatMessageHistory(session_id=session_id, connection=engine)
 
   prompt = ChatPromptTemplate.from_messages(
     [
@@ -436,7 +444,9 @@ def exercise_persistent_memory():
   print(f"Database created: {db_path}")
   print("Messages persist across restarts!")
 
-  # Cleanup for demo
+  # Cleanup for demo -- dispose the engine first to release pooled
+  # connections, otherwise Windows keeps the file locked.
+  engine.dispose()
   if os.path.exists(db_path):
     os.remove(db_path)
 
@@ -460,6 +470,7 @@ def exercise_persistent_memory_proof():
   import sqlite3
 
   from langchain_community.chat_message_histories import SQLChatMessageHistory
+  from sqlalchemy import create_engine
 
   db_path = "./chat_history.db"
   connection_string = f"sqlite:///{db_path}"
@@ -469,6 +480,12 @@ def exercise_persistent_memory_proof():
   if os.path.exists(db_path):
     os.remove(db_path)
 
+  # Single shared engine so we can dispose it (closes pooled connections)
+  # before deleting the file -- SQLChatMessageHistory(connection=<str>)
+  # creates a brand-new engine per call, and those are never released,
+  # which keeps the file locked on Windows.
+  engine = create_engine(connection_string)
+
   # --- Helper: build a fresh chain (simulates a new program run) ---
   def build_chain():
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
@@ -476,7 +493,7 @@ def exercise_persistent_memory_proof():
     def get_session_history(sid: str) -> BaseChatMessageHistory:
       return SQLChatMessageHistory(
         session_id=sid,
-        connection=connection_string,
+        connection=engine,
       )
 
     prompt = ChatPromptTemplate.from_messages(
@@ -574,16 +591,18 @@ def exercise_persistent_memory_proof():
   print("Key insight: The second chain had ZERO in-memory history.")
   print("Everything was loaded from SQLite -- true persistence!")
 
-  # Cleanup
+  # Cleanup -- dispose the engine first to release pooled connections,
+  # otherwise Windows keeps the file locked and os.remove raises WinError 32.
+  engine.dispose()
   if os.path.exists(db_path):
     os.remove(db_path)
 
 
 if __name__ == "__main__":
-  # demo_basic_memory()
-  # demo_multi_sessions()
-  # demo_message_trimming()
-  # demo_windowed_memory()
-  # demo_summary_memory()
-  # exercise_persistent_memory()
+  demo_basic_memory()
+  demo_multi_sessions()
+  demo_message_trimming()
+  demo_windowed_memory()
+  demo_summary_memory()
+  exercise_persistent_memory()
   exercise_persistent_memory_proof()
