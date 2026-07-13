@@ -3,6 +3,8 @@ Conversation Memory in LangChain
 Modern approaches to maintaining conversation context
 """
 
+import os
+import sqlite3
 from typing import Dict
 
 from dotenv import load_dotenv
@@ -25,48 +27,45 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 
-llm = init_chat_model("gpt-4o-mini")
+# Shared prompt with history placeholder, reused across every demo/exercise below
+PROMPT = ChatPromptTemplate.from_messages(
+  [
+    ("system", "You are a helpful assistant. Remember user details."),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{input}"),
+  ]
+)
+
+LLM = init_chat_model("gpt-4o-mini")
+LLM1 = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
 
 
+def get_session_history(
+  session_id: str, store: Dict[str, InMemoryChatMessageHistory]
+) -> BaseChatMessageHistory:
+  if session_id not in store:
+    store[session_id] = InMemoryChatMessageHistory()
+  return store[session_id]
+
+
+# Basic Conversation Memory with RunnableWithMessageHistory
 def demo_basic_memory():
   """Basic conversation memory with RunnableWithMessageHistory."""
 
-  print("=" * 60)
-  print("BASIC CONVERSATION MEMORY")
-  print("Using RunnableWithMessageHistory (modern approach)")
-  print("=" * 60)
-
-  # llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-
-  # Prompt with history placeholder
-  prompt = ChatPromptTemplate.from_messages(
-    [
-      ("system", "You are a helpful assistant. Be concise."),
-      MessagesPlaceholder(variable_name="history"),
-      ("human", "{input}"),
-    ]
-  )
-
-  chain = prompt | llm | StrOutputParser()
-
+  chain = PROMPT | LLM1 | StrOutputParser()
   # Session storage
   store: Dict[str, InMemoryChatMessageHistory] = {}
-
-  def get_session_history(session_id: str) -> BaseChatMessageHistory:
-    if session_id not in store:
-      store[session_id] = InMemoryChatMessageHistory()
-    return store[session_id]
-
+  session_id = "user_123"
   # Wrap with history
   chain_with_history = RunnableWithMessageHistory(
     chain,
-    get_session_history,
+    lambda sid: get_session_history(sid, store),
     input_messages_key="input",
     history_messages_key="history",
   )
 
   # Configuration for this session
-  config = {"configurable": {"session_id": "user_123"}}
+  config = {"configurable": {"session_id": session_id}}
 
   # Conversation
   messages = [
@@ -77,44 +76,29 @@ def demo_basic_memory():
 
   print("\nConversation:")
   for msg in messages:
-    print(f"\nUser: {msg}")
+    print(f"\n\033[92mUser: {msg}\033[0m")
     response = chain_with_history.invoke({"input": msg}, config=config)
     print(f"AI: {response}")
 
   # Show stored history
-  print(f"\n--- Stored History ({len(store['user_123'].messages)} messages) ---")
-  for msg in store["user_123"].messages:
+  print(
+    f"\n\033[92m--- InMemory Messages History ({len(store[session_id].messages)} messages) ---\033[0m"
+  )
+  for msg in store[session_id].messages:
     role = "Human" if isinstance(msg, HumanMessage) else "AI"
     print(f"  {role}: {msg.content[:50]}...")
 
 
+# Multiple Conversation Sessions
 def demo_multi_sessions():
+  """Simulate multiple users with separate conversation histories."""
 
-  print("=" * 60)
-  print("MULTIPLE CONVERSATION SESSIONS")
-  print("Each user gets their own memory")
-  print("=" * 60)
-
-  prompt = ChatPromptTemplate.from_messages(
-    [
-      ("system", "You are a helpful assistant. Remember user details."),
-      MessagesPlaceholder(variable_name="history"),
-      ("human", "{input}"),
-    ]
-  )
-
-  chain = prompt | llm | StrOutputParser()
-
+  chain = PROMPT | LLM1 | StrOutputParser()
   store: Dict[str, InMemoryChatMessageHistory] = {}
-
-  def get_session_history(session_id: str) -> BaseChatMessageHistory:
-    if session_id not in store:
-      store[session_id] = InMemoryChatMessageHistory()
-    return store[session_id]
 
   chain_with_history = RunnableWithMessageHistory(
     chain,
-    get_session_history,
+    lambda sid: get_session_history(sid, store),
     input_messages_key="input",
     history_messages_key="history",
   )
@@ -125,37 +109,34 @@ def demo_multi_sessions():
 
   # User A conversation
   print("\n--- User A ---")
-  print("User A: My favorite language is Python")
-  resp = chain_with_history.invoke(
-    {"input": "My favorite language is Python"}, config=user_a_config
-  )
+  message_a = "My name is John and my favorite language is Python"
+  print(f"\033[92mUser A: {message_a}\033[0m")
+  resp = chain_with_history.invoke({"input": message_a}, config=user_a_config)
   print(f"AI: {resp}")
 
   # User B conversation
   print("\n--- User B ---")
-  print("User B: I love JavaScript")
-  resp = chain_with_history.invoke({"input": "I love JavaScript"}, config=user_b_config)
+  message_b = "My name is Jane and I love JavaScript"
+  print(f"\033[93mUser B: {message_b}\033[0m")
+  resp = chain_with_history.invoke({"input": message_b}, config=user_b_config)
   print(f"AI: {resp}")
 
   # Ask each user about their preference
   print("\n--- Asking each about their preference ---")
 
-  print("\nUser A: What's my favorite language?")
-  resp = chain_with_history.invoke({"input": "What's my favorite language?"}, config=user_a_config)
+  question = "What's my name and what's my favorite language?"
+  print(f"\n\033[92mUser A: {question}\033[0m")
+  resp = chain_with_history.invoke({"input": question}, config=user_a_config)
   print(f"AI: {resp}")
 
-  print("\nUser B: What's my favorite language?")
-  resp = chain_with_history.invoke({"input": "What's my favorite language?"}, config=user_b_config)
+  print(f"\n\033[93mUser B: {question}\033[0m")
+  resp = chain_with_history.invoke({"input": question}, config=user_b_config)
   print(f"AI: {resp}")
 
 
+# Demonstrate message trimming to fit within context window
 def demo_message_trimming():
   """Trim messages to fit context window."""
-
-  print("=" * 60)
-  print("MESSAGE TRIMMING")
-  print("Keep conversation within token limits")
-  print("=" * 60)
 
   # Simulate a long conversation
   messages = [
@@ -175,32 +156,34 @@ def demo_message_trimming():
     HumanMessage(content="Can you summarize everything we discussed?"),
   ]
 
-  print(f"\nOriginal: {len(messages)} messages")
+  print(f"\033[92m\nOriginal: {len(messages)} messages\033[0m")
 
   # Trim to last N tokens
   trimmed = trim_messages(
     messages,
-    max_tokens=60,
+    max_tokens=100,
     strategy="last",
-    token_counter=llm,
+    token_counter=LLM,
     include_system=True,  # Always keep system message
     allow_partial=False,
   )
 
-  print(f"After trimming (max 60 tokens): {len(trimmed)} messages")
-  print("\nTrimmed messages:")
+  print(f"\033[93mAfter trimming (max 100 tokens): {len(trimmed)} messages\033[0m")
+  # print("\nTrimmed messages:")
   for msg in trimmed:
     role = type(msg).__name__.replace("Message", "")
-    print(f"  {role}: {msg.content[:60]}...")
+    print(f"  {role}: {msg.content}")
+
+  # Send the trimmed messages to the LLM to get the actual answer
+  response = LLM.invoke(trimmed)
+  print(f"\n\033[92mAI Response from trimmed context:\033[0m \n{response.content}")
 
 
+# Demonstrate sliding window memory (keep last K exchanges)
 def demo_windowed_memory():
   """Implement sliding window memory manually."""
 
-  print("=" * 60)
-  print("WINDOWED MEMORY (Keep Last K)")
-  print("Fixed-size conversation window")
-  print("=" * 60)
+  MAX_RECENT = 2
 
   class WindowedChatHistory(InMemoryChatMessageHistory):
     """Chat history that keeps only last k message pairs."""
@@ -215,24 +198,15 @@ def demo_windowed_memory():
 
   store: Dict[str, WindowedChatHistory] = {}
 
-  def get_session_history(session_id: str) -> BaseChatMessageHistory:
+  def get_windows_history(session_id: str) -> BaseChatMessageHistory:
     if session_id not in store:
-      store[session_id] = WindowedChatHistory(k=2)
+      store[session_id] = WindowedChatHistory(k=MAX_RECENT)
     return store[session_id]
 
-  prompt = ChatPromptTemplate.from_messages(
-    [
-      ("system", "You are a helpful assistant."),
-      MessagesPlaceholder(variable_name="history"),
-      ("human", "{input}"),
-    ]
-  )
-
-  chain = prompt | llm | StrOutputParser()
-
+  chain = PROMPT | LLM1 | StrOutputParser()
   chain_with_history = RunnableWithMessageHistory(
     chain,
-    get_session_history,
+    get_windows_history,
     input_messages_key="input",
     history_messages_key="history",
   )
@@ -246,13 +220,14 @@ def demo_windowed_memory():
     "I work as an AI engineer",
     "I have 2 cats",
     "What do you remember about me?",
+    "I'm 32 years old male",
   ]
 
-  print("\nConversation with k=2 window:")
+  # print("\nConversation with k=2 window:")
   for i, msg in enumerate(exchanges, 1):
-    print(f"\nUser: {msg}")
+    print(f"\033[92m\nUser: {msg}\033[0m")
     response = chain_with_history.invoke({"input": msg}, config=config)
-    print(f"AI: {response}")
+    print(f"\033[93mAI Response: \n{response}\033[0m")
 
     # Show window state after each exchange so students SEE it sliding
     history = store["windowed_test"].messages
@@ -261,26 +236,15 @@ def demo_windowed_memory():
     print(f"Remembers: {facts_in_memory}")
 
   # Final state - show what survived and what was lost
-  print("\n" + "=" * 60)
-  print("RESULT: Window only kept last 2 exchanges!")
-  print("Lost: name (Paulo), city (Seattle), AND job (AI engineer)")
-  print("Kept: cats + the 'remember' question")
-  print("This is the tradeoff: fixed memory = predictable cost, but older context is lost.")
+  print(
+    f"\033[38;5;208m\nRESULT: Window only kept last `{MAX_RECENT}` messages, due to WindowedChatHistory(`k={MAX_RECENT}`)!\033[0m"
+  )
 
 
+# Demo Summary Memory
 def demo_summary_memory():
   """End-to-end summary memory: auto-summarize old messages, keep recent ones verbatim."""
-
-  print("=" * 60)
-  print("SUMMARY MEMORY")
-  print("Summarize older messages to save tokens")
-  print("=" * 60)
-
-  # --- Setup ---
-  summary_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-  chat_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-
-  # The conversation prompt: summary of old context + recent messages
+  # Chat Prompt, Chat Chain (LLM1)
   chat_prompt = ChatPromptTemplate.from_messages(
     [
       (
@@ -291,10 +255,9 @@ def demo_summary_memory():
       ("human", "{input}"),
     ]
   )
+  chat_chain = chat_prompt | LLM1 | StrOutputParser()
 
-  chat_chain = chat_prompt | chat_llm | StrOutputParser()
-
-  # The summarization prompt: compress messages into a running summary
+  # Summary Prompt, LLM, Chain
   summarize_prompt = ChatPromptTemplate.from_template(
     "Condense the current summary and new messages into a single updated summary "
     "(2-3 sentences). Preserve all key facts about the user.\n\n"
@@ -302,7 +265,7 @@ def demo_summary_memory():
     "New messages:\n{new_messages}\n\n"
     "Updated summary:"
   )
-
+  summary_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
   summarize_chain = summarize_prompt | summary_llm | StrOutputParser()
 
   # --- State ---
@@ -311,18 +274,20 @@ def demo_summary_memory():
   MAX_RECENT = 4  # keep last 4 messages (2 exchanges) before summarizing
 
   # --- Conversation ---
-  exchanges = [
+  user_inputs = [
     "My name is Paulo and I'm from Seattle",
     "I work as an AI engineer building RAG systems",
     "I have 2 cats named Luna and Milo",
     "I'm building a LangChain course for Udemy",
+    "I'm 32 years old male",
+    "I'm going to work from 8:30am for 8 hours every workday",
     "What do you know about me? List everything.",
   ]
 
-  print(f"\nConfig: keep last {MAX_RECENT} messages, summarize the rest\n")
+  print(f"\033[38;5;208mConfig: keep last {MAX_RECENT} messages, summarize the rest\n\033[0m")
 
-  for user_input in exchanges:
-    print(f"User: {user_input}")
+  for user_input in user_inputs:
+    print(f"\033[92mUser: {user_input}\033[0m\n")
 
     # 1. Call the LLM with summary + recent messages + new input
     response = chat_chain.invoke(
@@ -332,48 +297,39 @@ def demo_summary_memory():
         "input": user_input,
       }
     )
-    print(f"AI: {response}")
+    print(f"\033[93mAI Response: \n{response}\n\033[0m")
 
-    # 2. Add this exchange to recent messages
+    # 2. Add this user_input to recent messages
     recent_messages.append(HumanMessage(content=user_input))
     recent_messages.append(AIMessage(content=response))
 
     # 3. If recent messages exceed limit, summarize the oldest ones
-    if len(recent_messages) > MAX_RECENT:
+    if len(recent_messages) > MAX_RECENT:  # One for User, one for AI
       # Take the oldest messages that will be summarized away
       messages_to_summarize = recent_messages[:-MAX_RECENT]
-      formatted = "\n".join(
-        f"{'Human' if isinstance(m, HumanMessage) else 'AI'}: {m.content}"
-        for m in messages_to_summarize
+      new_messages = "\n".join(
+        f"{'Human' if isinstance(msg, HumanMessage) else 'AI'}: {msg.content}"
+        for msg in messages_to_summarize
       )
-
       # Update the running summary
       running_summary = summarize_chain.invoke(
         {
           "current_summary": (running_summary if running_summary else "None yet."),
-          "new_messages": formatted,
+          "new_messages": new_messages,
         }
       )
-
       # Keep only the most recent messages
+      print("\033[38;5;208mSUMMARIZED...\033[0m")
       recent_messages = recent_messages[-MAX_RECENT:]
-
-      print(f"  >>> Summarized! Compressed {len(messages_to_summarize)} old messages")
-      print(f"  >>> Summary: {running_summary}")
-      print(f"  >>> Recent buffer: {len(recent_messages)} messages")
-    print()
+      print(f" >>> Compressed `{len(messages_to_summarize)}` old messages")
+      print(f" >>> Running Summary: {running_summary}")
 
   # --- Final state ---
-  print("=" * 60)
-  print("FINAL MEMORY STATE")
-  print("=" * 60)
-  print(f"\nRunning summary (compressed old context):\n  {running_summary}")
-  print(f"\nRecent messages kept verbatim ({len(recent_messages)}):")
-  for msg in recent_messages:
-    role = "Human" if isinstance(msg, HumanMessage) else "AI"
-    print(f"  {role}: {msg.content[:80]}")
-  print("\nKey insight: ALL facts preserved (name, city, job, cats, course)")
-  print("But token cost stays bounded -- old messages are compressed, not deleted!")
+
+  print("\033[38;5;208m\nFINAL MEMORY STATE\033[0m")
+
+  print(f"\nRunning Summary (compressed old context):\n  {running_summary}")
+  print(f"\nRecent Messages Length: ({len(recent_messages)}):")
 
 
 # Exercise
@@ -391,32 +347,22 @@ def exercise_persistent_memory():
   print("EXERCISE: Persistent Memory Chatbot")
   print("=" * 60)
 
-  import os
-
+  from langchain_community.chat_message_histories import SQLChatMessageHistory
   from sqlalchemy import create_engine
 
-  from langchain_community.chat_message_histories import SQLChatMessageHistory
-
   # Use SQLite for persistence
-  db_path = "./chat_history.db"
+  DB_PATH = "./chat_history.db"
 
   # Single shared engine so we can dispose it (closes pooled connections)
   # before deleting the file -- SQLChatMessageHistory(connection=<str>)
   # creates a brand-new engine per call, and those are never released,
   # which keeps the file locked on Windows.
-  engine = create_engine(f"sqlite:///{db_path}")
+  engine = create_engine(f"sqlite:///{DB_PATH}")
 
   def get_session_history(session_id: str) -> BaseChatMessageHistory:
     return SQLChatMessageHistory(session_id=session_id, connection=engine)
 
-  prompt = ChatPromptTemplate.from_messages(
-    [
-      ("system", "You are a helpful assistant. Remember user preferences."),
-      MessagesPlaceholder(variable_name="history"),
-      ("human", "{input}"),
-    ]
-  )
-  chain = prompt | llm | StrOutputParser()
+  chain = PROMPT | LLM1 | StrOutputParser()
 
   chain_with_history = RunnableWithMessageHistory(
     chain,
@@ -441,14 +387,14 @@ def exercise_persistent_memory():
     response = chain_with_history.invoke({"input": msg}, config=config)
     print(f"AI: {response}\n")
 
-  print(f"Database created: {db_path}")
+  print(f"Database created: {DB_PATH}")
   print("Messages persist across restarts!")
 
   # Cleanup for demo -- dispose the engine first to release pooled
   # connections, otherwise Windows keeps the file locked.
   engine.dispose()
-  if os.path.exists(db_path):
-    os.remove(db_path)
+  if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
 
 
 def exercise_persistent_memory_proof():
@@ -466,48 +412,32 @@ def exercise_persistent_memory_proof():
   print("EXERCISE: Persistent Memory Chatbot")
   print("=" * 60)
 
-  import os
-  import sqlite3
-
   from langchain_community.chat_message_histories import SQLChatMessageHistory
   from sqlalchemy import create_engine
 
-  db_path = "./chat_history.db"
-  connection_string = f"sqlite:///{db_path}"
-  session_id = "persistent_user"
+  DB_PATH = "./chat_history.db"
+  CONNECTION_STRING = f"sqlite:///{DB_PATH}"
+  SESSION_ID = "persistent_user"
 
   # Clean slate
-  if os.path.exists(db_path):
-    os.remove(db_path)
+  if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
 
   # Single shared engine so we can dispose it (closes pooled connections)
   # before deleting the file -- SQLChatMessageHistory(connection=<str>)
   # creates a brand-new engine per call, and those are never released,
   # which keeps the file locked on Windows.
-  engine = create_engine(connection_string)
+  engine = create_engine(CONNECTION_STRING)
 
   # --- Helper: build a fresh chain (simulates a new program run) ---
   def build_chain():
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-
     def get_session_history(sid: str) -> BaseChatMessageHistory:
       return SQLChatMessageHistory(
         session_id=sid,
         connection=engine,
       )
 
-    prompt = ChatPromptTemplate.from_messages(
-      [
-        (
-          "system",
-          "You are a helpful assistant. Remember user preferences and facts.",
-        ),
-        MessagesPlaceholder(variable_name="history"),
-        ("human", "{input}"),
-      ]
-    )
-
-    chain = prompt | llm | StrOutputParser()
+    chain = PROMPT | LLM1 | StrOutputParser()
 
     return RunnableWithMessageHistory(
       chain,
@@ -516,7 +446,7 @@ def exercise_persistent_memory_proof():
       history_messages_key="history",
     )
 
-  config = {"configurable": {"session_id": session_id}}
+  config = {"configurable": {"session_id": SESSION_ID}}
 
   # =====================================================
   # RUN 1 -- Store preferences (simulates first session)
@@ -542,10 +472,10 @@ def exercise_persistent_memory_proof():
   # PROOF: Inspect the raw SQLite database
   # =====================================================
   print("--- DATABASE PROOF ---\n")
-  print(f"Database file exists: {os.path.exists(db_path)}")
-  print(f"Database size: {os.path.getsize(db_path)} bytes\n")
+  print(f"Database file exists: {os.path.exists(DB_PATH)}")
+  print(f"Database size: {os.path.getsize(DB_PATH)} bytes\n")
 
-  conn = sqlite3.connect(db_path)
+  conn = sqlite3.connect(DB_PATH)
   cursor = conn.execute("SELECT * FROM message_store ORDER BY rowid")
   rows = cursor.fetchall()
   print(f"Total messages stored in DB: {len(rows)}\n")
@@ -582,7 +512,7 @@ def exercise_persistent_memory_proof():
   # FINAL: Show total messages accumulated
   # =====================================================
   print("--- FINAL DATABASE STATE ---\n")
-  conn = sqlite3.connect(db_path)
+  conn = sqlite3.connect(DB_PATH)
   cursor = conn.execute("SELECT COUNT(*) FROM message_store")
   count = cursor.fetchone()[0]
   conn.close()
@@ -594,15 +524,34 @@ def exercise_persistent_memory_proof():
   # Cleanup -- dispose the engine first to release pooled connections,
   # otherwise Windows keeps the file locked and os.remove raises WinError 32.
   engine.dispose()
-  if os.path.exists(db_path):
-    os.remove(db_path)
+  if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
+
+
+def _print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
 
 
 if __name__ == "__main__":
-  demo_basic_memory()
-  demo_multi_sessions()
-  demo_message_trimming()
-  demo_windowed_memory()
+  # _print_section("Demo Basic Memory")
+  # demo_basic_memory()
+
+  # _print_section("Demo Multi-Sessions")
+  # demo_multi_sessions()
+
+  # _print_section("Demo Message Trimming")
+  # demo_message_trimming()
+
+  # _print_section("Demo Windowed Memory")
+  # demo_windowed_memory()
+
+  _print_section("Demo Summary Memory")
   demo_summary_memory()
-  exercise_persistent_memory()
-  exercise_persistent_memory_proof()
+
+  # _print_section("Exercise Persistent Memory")
+  # exercise_persistent_memory()
+
+  # _print_section("Exercise Persistent Memory Proof")
+  # exercise_persistent_memory_proof()
