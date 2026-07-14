@@ -18,3 +18,4 @@ Thumbs.db
 .claude 
 chroma_db/
 .ruff_cache/
+.chat_history*.db

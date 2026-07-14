@@ -3,12 +3,14 @@ Conversation Memory in LangChain
 Modern approaches to maintaining conversation context
 """
 
+import json
 import os
 import sqlite3
 from typing import Dict
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langchain_community.chat_message_histories import SQLChatMessageHistory
 from langchain_core.chat_history import (
   BaseChatMessageHistory,
   InMemoryChatMessageHistory,
@@ -23,6 +25,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
+from sqlalchemy import create_engine
 
 load_dotenv()
 
@@ -40,12 +43,29 @@ LLM = init_chat_model("gpt-4o-mini")
 LLM1 = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
 
 
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+# Get Session History
 def get_session_history(
   session_id: str, store: Dict[str, InMemoryChatMessageHistory]
 ) -> BaseChatMessageHistory:
   if session_id not in store:
     store[session_id] = InMemoryChatMessageHistory()
   return store[session_id]
+
+
+# Get Session SQLite History
+def get_session_sql_history(session_id: str, engine) -> BaseChatMessageHistory:
+  return SQLChatMessageHistory(session_id=session_id, connection=engine)
+
+
+DB_PATH = "./.chat_history.db"
+CONNECTION_STRING = f"sqlite:///{DB_PATH}"
+SESSION_ID = "persistent_user"
 
 
 # Basic Conversation Memory with RunnableWithMessageHistory
@@ -95,7 +115,6 @@ def demo_multi_sessions():
 
   chain = PROMPT | LLM1 | StrOutputParser()
   store: Dict[str, InMemoryChatMessageHistory] = {}
-
   chain_with_history = RunnableWithMessageHistory(
     chain,
     lambda sid: get_session_history(sid, store),
@@ -219,8 +238,8 @@ def demo_windowed_memory():
     "I live in Seattle",
     "I work as an AI engineer",
     "I have 2 cats",
-    "What do you remember about me?",
     "I'm 32 years old male",
+    "What do you remember about me?",
   ]
 
   # print("\nConversation with k=2 window:")
@@ -271,7 +290,7 @@ def demo_summary_memory():
   # --- State ---
   running_summary = ""  # starts empty
   recent_messages = []  # full message objects
-  MAX_RECENT = 4  # keep last 4 messages (2 exchanges) before summarizing
+  MAX_RECENT = 6  # keep last 4 messages (2 exchanges) before summarizing
 
   # --- Conversation ---
   user_inputs = [
@@ -322,17 +341,17 @@ def demo_summary_memory():
       print("\033[38;5;208mSUMMARIZED...\033[0m")
       recent_messages = recent_messages[-MAX_RECENT:]
       print(f" >>> Compressed `{len(messages_to_summarize)}` old messages")
-      print(f" >>> Running Summary: {running_summary}")
+      print(f" >>> Running Summary: \n{running_summary}\n")
 
   # --- Final state ---
 
   print("\033[38;5;208m\nFINAL MEMORY STATE\033[0m")
 
-  print(f"\nRunning Summary (compressed old context):\n  {running_summary}")
+  # print(f"\nRunning Summary (compressed old context):\n{running_summary}")
   print(f"\nRecent Messages Length: ({len(recent_messages)}):")
 
 
-# Exercise
+# Exercise Persistent Memory
 def exercise_persistent_memory():
   """
   EXERCISE: Build a chatbot with:
@@ -343,60 +362,53 @@ def exercise_persistent_memory():
   Hint: Combine RunnableWithMessageHistory with SQLChatMessageHistory
   """
 
-  print("=" * 60)
-  print("EXERCISE: Persistent Memory Chatbot")
-  print("=" * 60)
-
-  from langchain_community.chat_message_histories import SQLChatMessageHistory
-  from sqlalchemy import create_engine
-
-  # Use SQLite for persistence
-  DB_PATH = "./chat_history.db"
-
   # Single shared engine so we can dispose it (closes pooled connections)
   # before deleting the file -- SQLChatMessageHistory(connection=<str>)
   # creates a brand-new engine per call, and those are never released,
-  # which keeps the file locked on Windows.
-  engine = create_engine(f"sqlite:///{DB_PATH}")
-
-  def get_session_history(session_id: str) -> BaseChatMessageHistory:
-    return SQLChatMessageHistory(session_id=session_id, connection=engine)
+  # which keeps the file locked on Windows. Clean db if exists
+  engine = create_engine(CONNECTION_STRING)
+  if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
 
   chain = PROMPT | LLM1 | StrOutputParser()
-
   chain_with_history = RunnableWithMessageHistory(
     chain,
-    get_session_history,
+    lambda sid: get_session_sql_history(sid, engine),
     input_messages_key="input",
     history_messages_key="history",
   )
+  config = {"configurable": {"session_id": SESSION_ID}}
 
-  config = {"configurable": {"session_id": "persistent_user"}}
-
-  print("\nPersistent memory chatbot:")
-  print("(Messages saved to SQLite database)\n")
+  print("Persistent memory chatbot:")
+  print(f"(Messages saved to SQLite database {DB_PATH})\n")
 
   # Test conversation
   test_messages = [
     "Remember that I prefer dark mode themes",
-    "What theme do I prefer?",
+    "My name is John",
+    "I'm 32 years old male",
+    "What theme do I prefer?  What is my name and how old am I",
   ]
 
   for msg in test_messages:
-    print(f"User: {msg}")
+    print(f"\033[92mUser: {msg}\033[0m")
     response = chain_with_history.invoke({"input": msg}, config=config)
-    print(f"AI: {response}\n")
+    print(f"\033[93mAI: {response}\n\033[0m")
 
+  print("\033[38;5;208m--- DATABASE STATE ---\033[0m")
   print(f"Database created: {DB_PATH}")
   print("Messages persist across restarts!")
 
-  # Cleanup for demo -- dispose the engine first to release pooled
-  # connections, otherwise Windows keeps the file locked.
+  conn = sqlite3.connect(DB_PATH)
+  cursor = conn.execute("SELECT COUNT(*) FROM message_store")
+  count = cursor.fetchone()[0]
+  conn.close()
+
+  print(f"Total messages in DB: {count}")
   engine.dispose()
-  if os.path.exists(DB_PATH):
-    os.remove(DB_PATH)
 
 
+# Exercise Persistent Memory Proof
 def exercise_persistent_memory_proof():
   """
   EXERCISE: Build a chatbot with:
@@ -408,17 +420,8 @@ def exercise_persistent_memory_proof():
   The second run reads from the same SQLite DB and recalls what the first run stored.
   """
 
-  print("=" * 60)
-  print("EXERCISE: Persistent Memory Chatbot")
-  print("=" * 60)
-
-  from langchain_community.chat_message_histories import SQLChatMessageHistory
-  from sqlalchemy import create_engine
-
-  DB_PATH = "./chat_history.db"
+  DB_PATH = "./.chat_history1.db"
   CONNECTION_STRING = f"sqlite:///{DB_PATH}"
-  SESSION_ID = "persistent_user"
-
   # Clean slate
   if os.path.exists(DB_PATH):
     os.remove(DB_PATH)
@@ -431,17 +434,11 @@ def exercise_persistent_memory_proof():
 
   # --- Helper: build a fresh chain (simulates a new program run) ---
   def build_chain():
-    def get_session_history(sid: str) -> BaseChatMessageHistory:
-      return SQLChatMessageHistory(
-        session_id=sid,
-        connection=engine,
-      )
-
     chain = PROMPT | LLM1 | StrOutputParser()
 
     return RunnableWithMessageHistory(
       chain,
-      get_session_history,
+      lambda sid: get_session_sql_history(sid, engine),
       input_messages_key="input",
       history_messages_key="history",
     )
@@ -451,7 +448,7 @@ def exercise_persistent_memory_proof():
   # =====================================================
   # RUN 1 -- Store preferences (simulates first session)
   # =====================================================
-  print("\n--- RUN 1: Storing preferences ---\n")
+  print("\033[95m--- RUN 1: Storing preferences ---\n\033[0m")
 
   chain_v1 = build_chain()
 
@@ -461,9 +458,9 @@ def exercise_persistent_memory_proof():
   ]
 
   for msg in run1_messages:
-    print(f"User: {msg}")
+    print(f"\033[92mUser: {msg}\033[0m")
     response = chain_v1.invoke({"input": msg}, config=config)
-    print(f"AI:   {response}\n")
+    print(f"\033[93mAI:   {response}\n\033[0m")
 
   # Throw away the chain object entirely -- no in-memory state survives
   del chain_v1
@@ -471,7 +468,7 @@ def exercise_persistent_memory_proof():
   # =====================================================
   # PROOF: Inspect the raw SQLite database
   # =====================================================
-  print("--- DATABASE PROOF ---\n")
+  print("\033[38;5;208m--- DATABASE PROOF ---\n\033[0m")
   print(f"Database file exists: {os.path.exists(DB_PATH)}")
   print(f"Database size: {os.path.getsize(DB_PATH)} bytes\n")
 
@@ -481,19 +478,19 @@ def exercise_persistent_memory_proof():
   print(f"Total messages stored in DB: {len(rows)}\n")
 
   for i, row in enumerate(rows):
-    print(
-      f"  Row {i + 1}: session={row[0] if len(row) > 0 else 'N/A'}, "
-      f"message (first 80 chars): {str(row[1])[:80] if len(row) > 1 else 'N/A'}..."
-    )
+    _, session_id, message_json = row
+    parsed = json.loads(message_json)
+    msg_type = parsed.get("type", "N/A")
+    content = parsed.get("data", {}).get("content", "N/A")
+    print(f"  Row {i + 1}: Type={msg_type}, Content={content}")
   conn.close()
 
   # =====================================================
   # RUN 2 -- Brand new chain, same DB (simulates restart)
   # =====================================================
-  print("\n--- RUN 2: Fresh chain, testing recall ---\n")
+  print("\033[95m\n--- RUN 2: Fresh chain, testing recall ---\n\033[0m")
 
   chain_v2 = build_chain()
-
   recall_questions = [
     "What's my name?",
     "What theme do I prefer?",
@@ -502,16 +499,16 @@ def exercise_persistent_memory_proof():
   ]
 
   for msg in recall_questions:
-    print(f"User: {msg}")
+    print(f"\033[92mUser: {msg}\033[0m")
     response = chain_v2.invoke({"input": msg}, config=config)
-    print(f"AI:   {response}\n")
+    print(f"\033[93mAI:   {response}\n\033[0m")
 
   del chain_v2
 
   # =====================================================
   # FINAL: Show total messages accumulated
   # =====================================================
-  print("--- FINAL DATABASE STATE ---\n")
+  print("\033[38;5;208m--- FINAL DATABASE STATE ---\033[0m")
   conn = sqlite3.connect(DB_PATH)
   cursor = conn.execute("SELECT COUNT(*) FROM message_store")
   count = cursor.fetchone()[0]
@@ -522,36 +519,27 @@ def exercise_persistent_memory_proof():
   print("Everything was loaded from SQLite -- true persistence!")
 
   # Cleanup -- dispose the engine first to release pooled connections,
-  # otherwise Windows keeps the file locked and os.remove raises WinError 32.
   engine.dispose()
-  if os.path.exists(DB_PATH):
-    os.remove(DB_PATH)
-
-
-def _print_section(name: str) -> None:
-  blue = "\033[94m"
-  reset = "\033[0m"
-  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
 
 
 if __name__ == "__main__":
-  # _print_section("Demo Basic Memory")
-  # demo_basic_memory()
+  print_section("Demo Basic Memory")
+  demo_basic_memory()
 
-  # _print_section("Demo Multi-Sessions")
-  # demo_multi_sessions()
+  print_section("Demo Multi-Sessions")
+  demo_multi_sessions()
 
-  # _print_section("Demo Message Trimming")
-  # demo_message_trimming()
+  print_section("Demo Message Trimming")
+  demo_message_trimming()
 
-  # _print_section("Demo Windowed Memory")
-  # demo_windowed_memory()
+  print_section("Demo Windowed Memory")
+  demo_windowed_memory()
 
-  _print_section("Demo Summary Memory")
+  print_section("Demo Summary Memory")
   demo_summary_memory()
 
-  # _print_section("Exercise Persistent Memory")
-  # exercise_persistent_memory()
+  print_section("Exercise Persistent Memory")
+  exercise_persistent_memory()
 
-  # _print_section("Exercise Persistent Memory Proof")
-  # exercise_persistent_memory_proof()
+  print_section("Exercise Persistent Memory Proof")
+  exercise_persistent_memory_proof()
