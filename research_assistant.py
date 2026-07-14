@@ -8,6 +8,8 @@ from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
+from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors import LLMChainExtractor
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_core.chat_history import (
   BaseChatMessageHistory,
@@ -27,7 +29,7 @@ load_dotenv()
 # ============================================================
 # Data Models
 # ============================================================
-class ResearchResponse(BaseModel):
+class StructuredResponse(BaseModel):
   """Structured response from the research assistant."""
 
   answer: str = Field(description="The answer to the question")
@@ -35,6 +37,124 @@ class ResearchResponse(BaseModel):
   sources: List[str] = Field(description="List of source documents used")
   key_quotes: List[str] = Field(description="Relevant quotes from sources", default=[])
   follow_up_questions: List[str] = Field(description="Suggested follow-up questions")
+
+
+# ============================================================
+# Prompts
+# ============================================================
+CONCISE_INSTRUCTIONS = """Answer ONLY using the provided context. Do not use any outside knowledge.
+Be concise. If the context does not contain the answer, say "I don't know" — do not guess."""
+
+
+PROMPT = ChatPromptTemplate.from_messages(
+  [
+    (
+      "system",
+      f"""You are an AI Research Assistant. Analyze the provided documents
+and return a structured response. {CONCISE_INSTRUCTIONS}
+
+Rules:
+1. ONLY use information from the provided context
+2. If the context doesn't have the answer, say so in the answer field
+3. Set confidence: "high" if directly stated, "medium" if inferred, "low" if partial
+4. Include the source filenames you actually used
+5. Extract key quotes word-for-word from the context
+6. Suggest 2-3 follow-up questions the user might want to ask
+
+Use conversation history to understand follow-up questions.""",
+    ),
+    MessagesPlaceholder(variable_name="history"),
+    (
+      "human",
+      """Context documents:
+
+{context}
+
+Available sources: {sources}
+
+Question: {question}""",
+    ),
+  ]
+)
+
+
+PROMPT2 = ChatPromptTemplate.from_messages(
+  [
+    (
+      "system",
+      f"""You are an AI Research Assistant. Answer questions
+based ONLY on the provided context documents. {CONCISE_INSTRUCTIONS}
+
+Rules:
+1. Only use information from the context below
+2. If the context doesn't have the answer, say so
+3. Cite which sources you used (e.g. "According to Source 1...")
+4. Rate your confidence: high, medium, or low""",
+    ),
+    MessagesPlaceholder(variable_name="history"),
+    (
+      "human",
+      """Context documents:
+
+{context}
+
+Question: {question}
+
+Provide a clear answer with source citations.""",
+    ),
+  ]
+)
+
+
+TEXT_NATURAL_NETWORKS = """
+        Attention Mechanisms in Neural Networks
+
+        The attention mechanism was introduced in "Attention Is All You Need"
+        by Vaswani et al. (2017). It allows models to focus on relevant parts
+        of the input when generating output.
+
+        Key concepts:
+        - Query, Key, Value (QKV) triplets
+        - Scaled dot-product attention
+        - Multi-head attention for parallel processing
+
+        The transformer architecture has become the foundation for modern NLP
+        models including BERT, GPT, and T5.
+        """
+
+TEXT_RAG = """
+        Retrieval-Augmented Generation (RAG)
+
+        RAG combines retrieval systems with generative models. First introduced
+        by Lewis et al. (2020), RAG addresses the limitation of LLMs being
+        limited to their training data.
+
+        Components of a RAG system:
+        1. Document store with vector embeddings
+        2. Retriever to find relevant documents
+        3. Generator (LLM) to produce responses
+
+        Benefits include reduced hallucination, up-to-date information,
+        and source attribution.
+        """
+
+TEXT_LANGCHAIN = """
+        LangChain and LangGraph Framework Overview
+
+        LangChain is an open-source framework for building LLM applications.
+        Key features include modular components, integration with 50+ LLM
+        providers, and built-in RAG utilities.
+
+        LangGraph extends LangChain for stateful applications with
+        graph-based state management, support for cycles and loops,
+        and human-in-the-loop workflows.
+        """
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
 
 
 # ============================================================
@@ -52,19 +172,17 @@ class AIResearchAssistant:
     chunk_overlap: int = 200,
   ):
     self.persist_directory = persist_directory
-
     # 1. Embeddings - turns text into vectors
     self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-
     self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
+    print(f"\033[93mEmbedding model: {self.embeddings.model}\033[0m")
+    print(f"\033[93mLLM model: {self.llm.model_name}\033[0m")
     # 2. Splitter - breaks big docs into chunks
     self.splitter = RecursiveCharacterTextSplitter(
       chunk_size=chunk_size,
       chunk_overlap=chunk_overlap,
       separators=["\n\n", "\n", ". ", " ", ""],
     )
-
     # 3. Vector store - stores and searches embeddings
     self.vectorstore = Chroma(
       persist_directory=persist_directory,
@@ -74,9 +192,9 @@ class AIResearchAssistant:
 
     self.session_store: Dict[str, InMemoryChatMessageHistory] = {}
 
-    print("Research Assistant initialized")
-    print(f"  Vector store: {persist_directory}")
-    print(f"  Documents indexed: {self.vectorstore._collection.count()}")
+    print_section("STEP 0: Research Assistant initialized")
+    print(f"Vector store: {persist_directory}")
+    print(f"Documents indexed: {self.vectorstore._collection.count()}\n")
 
   def add_documents(
     self,
@@ -108,11 +226,6 @@ class AIResearchAssistant:
     doc = Document(page_content=text, metadata={"source": source, **(metadata or {})})
     return self.add_documents([doc])
 
-  def add_texts(self, texts: List[str], source: str) -> int:
-    """Add multiple text strings from the same source."""
-    docs = [Document(page_content=t, metadata={"source": source}) for t in texts]
-    return self.add_documents(docs)
-
   def get_document_count(self) -> int:
     """Get total number of indexed chunks."""
     return self.vectorstore._collection.count()
@@ -127,7 +240,7 @@ class AIResearchAssistant:
     return sorted(list(sources))
 
   def _build_retriever(self, use_advanced: bool = False):
-    """Build retriever -- basic or advanced"""
+    """Build retriever -- basic or advanced (multi-query + compression)"""
 
     # Base: simple similarity search
     base_retriever = self.vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 4})
@@ -135,13 +248,18 @@ class AIResearchAssistant:
     if not use_advanced:
       return base_retriever
 
-    # Multi-query: LLM generates multiple search queries
-    multi_retriever = MultiQueryRetriever.from_llm(
-      retriever=base_retriever,
-      llm=self.llm,
+    # Compression: LLM strips each retrieved chunk down to the relevant part
+    compressor = LLMChainExtractor.from_llm(self.llm)
+    compression_retriever = ContextualCompressionRetriever(
+      base_compressor=compressor,
+      # Multi-query: LLM generates multiple search queries
+      base_retriever=MultiQueryRetriever.from_llm(
+        retriever=base_retriever,
+        llm=self.llm,
+      ),
     )
 
-    return multi_retriever
+    return compression_retriever
 
   def _format_docs_for_context(self, docs) -> str:
     """Format retrieved documents into a string for the prompt."""
@@ -165,11 +283,11 @@ class AIResearchAssistant:
     question: str,
     session_id: str = "default",
     use_advanced: bool = True,
-  ) -> ResearchResponse:
+  ) -> StructuredResponse:
     """Ask a question and get a structured response."""
 
     # LLM that returns a Pydantic object instead of a string
-    structured_llm = self.llm.with_structured_output(ResearchResponse)
+    structured_llm = self.llm.with_structured_output(StructuredResponse)
 
     # Get memory
     history = self._get_session_history(session_id)
@@ -180,39 +298,7 @@ class AIResearchAssistant:
     context = self._format_docs_for_context(docs)
     sources = list(set(d.metadata.get("source", "Unknown") for d in docs))
 
-    # Prompt -- tell the LLM about available sources
-    prompt = ChatPromptTemplate.from_messages(
-      [
-        (
-          "system",
-          """You are an AI Research Assistant. Analyze the provided documents 
-    and return a structured response.
-
-    Rules:
-    1. ONLY use information from the provided context
-    2. If the context doesn't have the answer, say so in the answer field
-    3. Set confidence: "high" if directly stated, "medium" if inferred, "low" if partial
-    4. Include the source filenames you actually used
-    5. Extract key quotes word-for-word from the context
-    6. Suggest 2-3 follow-up questions the user might want to ask
-
-    Use conversation history to understand follow-up questions.""",
-        ),
-        MessagesPlaceholder(variable_name="history"),
-        (
-          "human",
-          """Context documents:
-
-    {context}
-
-    Available sources: {sources}
-
-    Question: {question}""",
-        ),
-      ]
-    )
-
-    chain = prompt | structured_llm
+    chain = PROMPT | structured_llm
 
     response = chain.invoke(
       {
@@ -229,7 +315,12 @@ class AIResearchAssistant:
 
     return response
 
-  def ask(self, question: str, session_id: str = "default", use_advanced: bool = True) -> str:
+  def ask(
+    self,
+    question: str,
+    session_id: str = "default",
+    use_advanced: bool = True,
+  ) -> str:
     """Ask a question against the research documents."""
 
     history = self._get_session_history(session_id)
@@ -239,35 +330,8 @@ class AIResearchAssistant:
     docs = retriever.invoke(question)
     context = self._format_docs_for_context(docs)
 
-    # Step 3: Build the prompt
-    prompt = ChatPromptTemplate.from_messages(
-      [
-        (
-          "system",
-          """You are an AI Research Assistant. Answer questions
-    based ONLY on the provided context documents.
-
-    Rules:
-    1. Only use information from the context below
-    2. If the context doesn't have the answer, say so
-    3. Cite which sources you used (e.g. "According to Source 1...")
-    4. Rate your confidence: high, medium, or low""",
-        ),
-        MessagesPlaceholder(variable_name="history"),
-        (
-          "human",
-          """Context documents:
-
-    {context}
-
-    Question: {question}
-
-    Provide a clear answer with source citations.""",
-        ),
-      ]
-    )
-
     # Step 4: Build and run the chain
+    prompt = PROMPT2
     chain = prompt | self.llm | StrOutputParser()
 
     response = chain.invoke(
@@ -284,92 +348,27 @@ class AIResearchAssistant:
 
     return response
 
-  def clear_session(self, session_id: str):
-    if session_id in self.session_store:
-      self.session_store[session_id].clear()
-      print(f"Cleared session: {session_id}")
 
-  def get_session_messages(self, session_id: str) -> list:
-    """Get conversation history as readable dicts."""
-    if session_id not in self.session_store:
-      return []
-    return [
-      {
-        "role": "human" if isinstance(m, HumanMessage) else "assistant",
-        "content": m.content,
-      }
-      for m in self.session_store[session_id].messages
-    ]
-
-  def compare_retrievers(self, question: str):
-    """Show basic vs advanced retrieval side by side."""
-
-    print(f'Question: "{question}"\n')
-
-    # --- Basic ---
-    basic = self.vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 4})
-    basic_docs = basic.invoke(question)
-
-    print("=" * 60)
-    print(f"BASIC RETRIEVER: {len(basic_docs)} chunks")
-    print("=" * 60)
-
-    basic_total_chars = 0
-    for i, doc in enumerate(basic_docs):
-      source = doc.metadata.get("source", "Unknown")
-      basic_total_chars += len(doc.page_content)
-      print(f"\n  Chunk {i + 1} [{source}] ({len(doc.page_content)} chars):")
-      print(f"  {doc.page_content[:150]}...")
-
-    print(f"\n  Total text sent to LLM: {basic_total_chars} chars")
-
-    # --- Advanced ---
-    advanced = self._build_retriever(use_advanced=True)
-    advanced_docs = advanced.invoke(question)
-
-    print("\n" + "=" * 60)
-    print(f"ADVANCED RETRIEVER: {len(advanced_docs)} chunks")
-    print("=" * 60)
-
-    advanced_total_chars = 0
-    for i, doc in enumerate(advanced_docs):
-      source = doc.metadata.get("source", "Unknown")
-      advanced_total_chars += len(doc.page_content)
-      print(f"\n  Chunk {i + 1} [{source}] ({len(doc.page_content)} chars):")
-      print(f"  {doc.page_content[:150]}...")
-
-    print(f"\n  Total text sent to LLM: {advanced_total_chars} chars")
-
-    # --- Summary ---
-    print("\n" + "=" * 60)
-    print("COMPARISON")
-    print("=" * 60)
-    print(f"  Basic:    {len(basic_docs)} chunks, {basic_total_chars} chars")
-    print(f"  Advanced: {len(advanced_docs)} chunks, {advanced_total_chars} chars")
-
-    if advanced_total_chars < basic_total_chars:
-      reduction = round((1 - advanced_total_chars / basic_total_chars) * 100)
-      print(f"  Compression saved {reduction}% of tokens!")
-    else:
-      print("  Advanced found more targeted content")
-
-
-def print_research_response(question: str, response: ResearchResponse):
+def print_research_response(question: str, response: StructuredResponse):
   """Pretty print a structured research response."""
 
-  print(f"\nQ: {question}")
-  print(f"\n  Answer: {response.answer}")
-  print(f"\n  Confidence: {response.confidence}")
-  print(f"  Sources: {', '.join(response.sources)}")
+  print(f"\n\033[92mQuery: {question}\033[0m")
+  print(f"\033[93mAnswer: {response.answer}\033[0m")
+  print(
+    f"\033[38;5;208mConfidence: {response.confidence}, Sources: {', '.join(response.sources)}\033[0m\n"
+  )
 
   if response.key_quotes:
-    print("\n  Key Quotes:")
-    for q in response.key_quotes:
-      print(f'    - "{q}"')
+    print("\033[95mKey Quotes:\033[0m")
+    for i, q in enumerate(response.key_quotes):
+      print(f"{i + 1}. {q[:120]}")
 
-  print("\n  Follow-up Questions:")
-  for fq in response.follow_up_questions:
-    print(f"    - {fq}")
+  if response.follow_up_questions:
+    print("\n\033[93mFollow-up Questions:\033[0m")
+    for i, fq in enumerate(response.follow_up_questions):
+      print(f"{i + 1}. {fq}")
+
+  # print("\n")
 
 
 if __name__ == "__main__":
@@ -379,144 +378,85 @@ if __name__ == "__main__":
   assistant = AIResearchAssistant()
 
   # Add research docs
-  assistant.add_text(
-    """
-        Attention Mechanisms in Neural Networks
-
-        The attention mechanism was introduced in "Attention Is All You Need"
-        by Vaswani et al. (2017). It allows models to focus on relevant parts
-        of the input when generating output.
-
-        Key concepts:
-        - Query, Key, Value (QKV) triplets
-        - Scaled dot-product attention
-        - Multi-head attention for parallel processing
-
-        The transformer architecture has become the foundation for modern NLP
-        models including BERT, GPT, and T5.
-        """,
-    source="attention_mechanisms.pdf",
-  )
-
-  assistant.add_text(
-    """
-        Retrieval-Augmented Generation (RAG)
-
-        RAG combines retrieval systems with generative models. First introduced
-        by Lewis et al. (2020), RAG addresses the limitation of LLMs being
-        limited to their training data.
-
-        Components of a RAG system:
-        1. Document store with vector embeddings
-        2. Retriever to find relevant documents
-        3. Generator (LLM) to produce responses
-
-        Benefits include reduced hallucination, up-to-date information,
-        and source attribution.
-        """,
-    source="rag_survey.pdf",
-  )
-
-  assistant.add_text(
-    """
-        LangChain and LangGraph Framework Overview
-
-        LangChain is an open-source framework for building LLM applications.
-        Key features include modular components, integration with 50+ LLM
-        providers, and built-in RAG utilities.
-
-        LangGraph extends LangChain for stateful applications with
-        graph-based state management, support for cycles and loops,
-        and human-in-the-loop workflows.
-        """,
-    source="langchain_docs.md",
-  )
+  assistant.add_text(TEXT_NATURAL_NETWORKS, source="attention_mechanisms.pdf")
+  assistant.add_text(TEXT_RAG, source="rag_survey.pdf")
+  assistant.add_text(TEXT_LANGCHAIN, source="langchain_docs.md")
 
   print(f"\nIndexed: {assistant.get_document_count()} chunks")
 
   session = "structured_demo"
 
   # --- Step 1: String vs Structured comparison ---
-  print("\n" + "=" * 60)
-  print("STEP 1: String response vs Structured response")
-  print("=" * 60)
+  print_section("STEP 1: String response vs Structured response")
 
   question = "What is RAG and what are its benefits?"
+  print(f"\033[92mQuery: {question}\033[0m")
 
-  print("\n--- String response (ask) ---")
+  print("\n\033[38;5;208m--- String response ---\033[0m")
   string_response = assistant.ask(question, "string_test")
   print(f"Type: {type(string_response)}")
   print(f"Response: {string_response[:200]}...")
 
-  print("\n--- Structured response (ask_structured) ---")
+  print("\n\033[38;5;208m--- Structured response ---\033[0m")
   structured_response = assistant.ask_structured(question, "struct_test")
   print(f"Type: {type(structured_response)}")
-  print(f"answer:             {structured_response.answer[:100]}...")
-  print(f"confidence:         {structured_response.confidence}")
-  print(f"sources:            {structured_response.sources}")
-  print(f"key_quotes:         {structured_response.key_quotes[:2]}")
-  print(f"follow_up_questions: {structured_response.follow_up_questions}")
+  print(f"Answer: {structured_response.answer[:100]}...")
+  print(f"Confidence: {structured_response.confidence}")
+  print(f"Sources: {structured_response.sources}")
+  print(f"Key_quotes: {structured_response.key_quotes[:2]}")
+  print(f"Follow_up_questions: {structured_response.follow_up_questions}")
 
   # --- Step 2: Access fields directly ---
-  print("\n" + "=" * 60)
-  print("STEP 2: Use fields in your code")
-  print("=" * 60)
+  print_section("STEP 2: Use fields in your code - Structured response")
 
-  r = assistant.ask_structured("What is the attention mechanism?", session)
+  question = "What is the attention mechanism?"
+  print(f"\033[92mQuery: {question}\033[0m")
 
+  response = assistant.ask_structured(question, session)
   # This is what your app code looks like
-  if r.confidence == "high":
-    print(f"\n  Confident answer from: {', '.join(r.sources)}")
+  print(f"\033[93mAnswer: {response.answer}\033[0m")
+  if response.confidence == "high":
+    print(f"\033[38;5;208mConfident Answer from: {', '.join(response.sources)}\033[0m")
   else:
-    print("\n  Low confidence -- may need more sources")
+    print("\033[38;5;208mLow Confidence Answer -- may need more sources\033[0m")
 
-  print(f"\n  Answer: {r.answer[:200]}")
-
-  print("\n  Suggested follow-ups:")
-  for fq in r.follow_up_questions:
-    print(f"    -> {fq}")
+  print("\n\033[38;5;208mSuggested follow-ups:\033[0m")
+  for i, fq in enumerate(response.follow_up_questions):
+    print(f"{i + 1}. {fq}")
 
   # --- Step 3: Multi-turn with structured output ---
-  print("\n" + "=" * 60)
-  print("STEP 3: Memory works with structured output too")
-  print("=" * 60)
+  print_section("STEP 3: Memory works with structured output too")
 
-  q1 = "What are the components of RAG?"
-  print(f"\nUser: {q1}")
-  r1 = assistant.ask_structured(q1, session)
-  print_research_response(q1, r1)
+  questions = [
+    "What are the components of RAG?",
+    "How does the second component work?",
+    "Connect everything we discussed to LangChain.",
+    "What is my name?",
+    "What is Claude?",
+  ]
 
-  q2 = "How does the second component work?"
-  print(f"\n{'- ' * 30}")
-  print(f"\nUser: {q2}")
-  r2 = assistant.ask_structured(q2, session)
-  print_research_response(q2, r2)
-
-  q3 = "Connect everything we discussed to LangChain."
-  print(f"\n{'- ' * 30}")
-  print(f"\nUser: {q3}")
-  r3 = assistant.ask_structured(q3, session)
-  print_research_response(q3, r3)
+  for i, q in enumerate(questions):
+    r = assistant.ask_structured(q, session)
+    print_research_response(q, r)
 
   # --- Step 4: Final stats ---
-  print("\n" + "=" * 60)
-  print("FINAL: What we built across 5 videos")
-  print("=" * 60)
+  print_section("STEP FINAL: What we built across 5 videos")
+  print("\033[92mAssistant AI Final Results:\033[0m")
 
   history = assistant._get_session_history(session)
   msg_count = len(history.messages) if hasattr(history, "messages") else len(history)
 
   print(
     f"""
-  Document ingestion    -> {assistant.get_document_count()} chunks indexed
-  Sources tracked       -> {assistant.list_sources()}
-  Basic retrieval       -> similarity search
-  Advanced retrieval    -> multi-query + compression
-  Conversation memory   -> {msg_count} messages in session '{session}'
-  Structured output     -> ResearchResponse with {len(ResearchResponse.model_fields)} fields
+Document ingestion    -> {assistant.get_document_count()} chunks indexed
+Sources tracked       -> {assistant.list_sources()}
+Basic retrieval       -> similarity search
+Advanced retrieval    -> Multi-query + Compression
+Conversation memory   -> {msg_count} messages in session '{session}'
+Structured output     -> StructuredResponse with {len(StructuredResponse.model_fields)} fields
 
-  From raw text to a production-ready research assistant.
-  That's the full RAG pipeline.
+From raw text to a production-ready research assistant.
+That's the full RAG pipeline.
     """
   )
 
