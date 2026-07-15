@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
+COMPARE = os.getenv("COMPARE", "False").strip().lower() == "true"
+
 
 # ============================================================
 # Data Models
@@ -264,9 +266,8 @@ class AIResearchAssistant:
       return base_retriever
 
     # Compression: LLM strips each retrieved chunk down to the relevant part
-    compressor = LLMChainExtractor.from_llm(self.llm)
     compression_retriever = ContextualCompressionRetriever(
-      base_compressor=compressor,
+      base_compressor=LLMChainExtractor.from_llm(self.llm),
       # Multi-query: LLM generates multiple search queries
       base_retriever=MultiQueryRetriever.from_llm(
         retriever=base_retriever,
@@ -275,6 +276,56 @@ class AIResearchAssistant:
     )
 
     return compression_retriever
+
+  def compare_retrievers(self, question: str):
+    """Show basic vs advanced retrieval side by side."""
+
+    print("\n\033[92m" + "-" * 60)
+    print(f"Compare retrivers\nQuery: {question}")
+    print("-" * 60 + "\033[0m")
+
+    # --- Basic ---
+    basic = self.vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+    basic_docs = basic.invoke(question)
+
+    print(f"\033[93mBASIC RETRIEVER: {len(basic_docs)} chunks\033[0m")
+
+    basic_total_chars = 0
+    for i, doc in enumerate(basic_docs):
+      source = doc.metadata.get("source", "Unknown")
+      basic_total_chars += len(doc.page_content)
+      print(f"Chunk {i + 1}. [{source}] ({len(doc.page_content)} chars):")
+      print(f"{doc.page_content[:150]}...")
+
+    print(f"\033[95mBasic Retrival total text sent to LLM: {basic_total_chars} chars\033[0m")
+
+    # --- Advanced ---
+    advanced = self._build_retriever(use_advanced=True)
+    advanced_docs = advanced.invoke(question)
+
+    print(f"\n\033[93mADVANCED RETRIEVER: {len(advanced_docs)} chunks\033[0m")
+
+    advanced_total_chars = 0
+    for i, doc in enumerate(advanced_docs):
+      source = doc.metadata.get("source", "Unknown")
+      advanced_total_chars += len(doc.page_content)
+      print(f"Chunk {i + 1}. [{source}] ({len(doc.page_content)} chars):")
+      print(f"{doc.page_content[:150]}...")
+
+    print(f"\033[95mAdvanced Retrival total text sent to LLM: {advanced_total_chars} chars\033[0m")
+
+    # --- Summary ---
+
+    print("\n\033[93mCOMPARISON\033[0m")
+
+    print(f"Basic:    {len(basic_docs)} chunks, {basic_total_chars} chars")
+    print(f"Advanced: {len(advanced_docs)} chunks, {advanced_total_chars} chars")
+
+    if advanced_total_chars < basic_total_chars:
+      reduction = round((1 - advanced_total_chars / basic_total_chars) * 100)
+      print(f"Compression saved {reduction}% of tokens!")
+    else:
+      print("Advanced found more targeted content")
 
   def _format_docs_for_context(self, docs) -> str:
     """Format retrieved documents into a string for the prompt."""
@@ -340,7 +391,7 @@ class AIResearchAssistant:
 
     history = self._get_session_history(session_id)
 
-    # Use basic or advanced retriever
+    # Use Advanced retriever
     retriever = self._build_retriever(use_advanced=use_advanced)
     docs = retriever.invoke(question)
     context = self._format_docs_for_context(docs)
@@ -409,12 +460,12 @@ if __name__ == "__main__":
   question = "What is RAG and what are its benefits?"
   print(f"\033[92mQuery: {question}\033[0m")
 
-  print("\n\033[38;5;208m--- String response ---\033[0m")
+  print("\n\033[38;5;208m--- String response - ask() ---\033[0m")
   string_response = assistant.ask(question, "string_test")
   print(f"Type: {type(string_response)}")
   print(f"Response: {string_response[:200]}...")
 
-  print("\n\033[38;5;208m--- Structured response ---\033[0m")
+  print("\n\033[38;5;208m--- Structured response - ask_structured() ---\033[0m")
   structured_response = assistant.ask_structured(question, "struct_test")
   print(f"Type: {type(structured_response)}")
   print(f"Answer: {structured_response.answer[:100]}...")
@@ -447,16 +498,18 @@ if __name__ == "__main__":
   questions = [
     "What are the components of RAG?",
     "My name is John",
-    "'Claude Code' is Anthropic's terminal-based AI coding assistant for understanding, editing, testing, and managing codebases using natural language.",
-    "How does the second component work?",
-    "Connect everything we discussed to LangChain.",
+    # "'Claude Code' is Anthropic's terminal-based AI coding assistant for understanding, editing, testing, and managing codebases using natural language.",
+    # "How does the second component work?",
+    # "Connect everything we discussed to LangChain.",
     "What is my name?",
-    "What is 'Claude Code'?",
+    # "What is 'Claude Code'?",
   ]
 
   for i, q in enumerate(questions):
     r = assistant.ask_structured(q, session)
     print_research_response(q, r)
+    if COMPARE:
+      assistant.compare_retrievers(q)
 
   # --- Step 4: Final stats ---
   print_section("STEP FINAL: What we built across 5 videos")
