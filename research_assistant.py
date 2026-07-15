@@ -3,6 +3,7 @@ Section 2 Project: AI Research Assistant
 Complete RAG system with conversation memory
 """
 
+import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -42,8 +43,13 @@ class StructuredResponse(BaseModel):
 # ============================================================
 # Prompts
 # ============================================================
-CONCISE_INSTRUCTIONS = """Answer ONLY using the provided context. Do not use any outside knowledge.
-Be concise. If the context does not contain the answer, say "I don't know" — do not guess."""
+CONCISE_INSTRUCTIONS = """Answer using ONLY the provided context documents and the conversation
+history below. Never use your own outside/pretrained knowledge.
+Be concise. If neither the context nor the history contains the answer, say "I don't know" —
+do not guess.
+The conversation history may be used for two things: (1) facts the user told you directly
+(e.g. their name), and (2) interpreting follow-up questions (e.g. resolve "it" or "the second
+one" to what was discussed earlier)."""
 
 
 PROMPT = ChatPromptTemplate.from_messages(
@@ -54,14 +60,19 @@ PROMPT = ChatPromptTemplate.from_messages(
 and return a structured response. {CONCISE_INSTRUCTIONS}
 
 Rules:
-1. ONLY use information from the provided context
-2. If the context doesn't have the answer, say so in the answer field
+1. Only use information from the provided context or the conversation history -- never
+   outside/pretrained knowledge
+2. If neither the context nor the history has the answer, say so in the answer field
 3. Set confidence: "high" if directly stated, "medium" if inferred, "low" if partial
-4. Include the source filenames you actually used
-5. Extract key quotes word-for-word from the context
+4. In "sources", list the document filenames you actually used. If the answer came from a
+   fact the user stated earlier in the conversation instead of a document, use
+   "conversation history" as the source
+5. Extract key quotes word-for-word from the context (leave empty if the answer came from
+   conversation history instead)
 6. Suggest 2-3 follow-up questions the user might want to ask
 
-Use conversation history to understand follow-up questions.""",
+Use conversation history to understand follow-up questions and to recall facts the user told
+you directly (e.g. their name).""",
     ),
     MessagesPlaceholder(variable_name="history"),
     (
@@ -150,6 +161,8 @@ TEXT_LANGCHAIN = """
         and human-in-the-loop workflows.
         """
 
+DB_PATH = "./research_db"
+
 
 def print_section(name: str) -> None:
   blue = "\033[94m"
@@ -167,7 +180,7 @@ class AIResearchAssistant:
 
   def __init__(
     self,
-    persist_directory: str = "./research_db",
+    persist_directory: str = DB_PATH,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
   ):
@@ -218,13 +231,15 @@ class AIResearchAssistant:
     # Store in vector DB
     self.vectorstore.add_documents(chunks)
 
-    print(f"Added {len(chunks)} chunks from {len(documents)} documents")
+    print(
+      f"\033[38;5;208mAdded {len(chunks)} chunks from {len(documents)} documents, source: {source_name}\033[0m"
+    )
     return len(chunks)
 
   def add_text(self, text: str, source: str, metadata: dict = None) -> int:
     """Add a single text string as a document."""
     doc = Document(page_content=text, metadata={"source": source, **(metadata or {})})
-    return self.add_documents([doc])
+    return self.add_documents([doc], source_name=source)
 
   def get_document_count(self) -> int:
     """Get total number of indexed chunks."""
@@ -374,7 +389,9 @@ def print_research_response(question: str, response: StructuredResponse):
 if __name__ == "__main__":
   import shutil
 
-  shutil.rmtree("./research_db", ignore_errors=True)
+  if os.path.exists(DB_PATH):
+    print(f"\033[93mFiles on Disk: {os.listdir(DB_PATH)}\033[0m")
+  shutil.rmtree(DB_PATH, ignore_errors=True)
   assistant = AIResearchAssistant()
 
   # Add research docs
@@ -429,10 +446,12 @@ if __name__ == "__main__":
 
   questions = [
     "What are the components of RAG?",
+    "My name is John",
+    "'Claude Code' is Anthropic's terminal-based AI coding assistant for understanding, editing, testing, and managing codebases using natural language.",
     "How does the second component work?",
     "Connect everything we discussed to LangChain.",
     "What is my name?",
-    "What is Claude?",
+    "What is 'Claude Code'?",
   ]
 
   for i, q in enumerate(questions):
@@ -455,10 +474,10 @@ Advanced retrieval    -> Multi-query + Compression
 Conversation memory   -> {msg_count} messages in session '{session}'
 Structured output     -> StructuredResponse with {len(StructuredResponse.model_fields)} fields
 
-From raw text to a production-ready research assistant.
-That's the full RAG pipeline.
+\033[92mFrom raw text to a production-ready research assistant.
+That's the full RAG pipeline.\033[0m
     """
   )
 
   # Cleanup
-  shutil.rmtree("./research_db", ignore_errors=True)
+  shutil.rmtree(DB_PATH, ignore_errors=True)
