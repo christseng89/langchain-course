@@ -3,6 +3,7 @@ Agent Handoffs in LangGraph
 Passing control and context between agents
 """
 
+import re
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -15,7 +16,15 @@ from typing_extensions import Annotated, TypedDict
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
 
 
 class HandoffState(TypedDict):
@@ -34,6 +43,53 @@ class HandoffDecision(BaseModel):
 
 
 def create_customer_service_system():
+  def sales_agent(state: HandoffState) -> dict:
+    """Sales specialist."""
+    system = f"""You are a sales specialist. Context from triage: {state.get("context_summary", "None")}
+
+            Help the customer with product questions and purchases.
+            Be helpful and informative, not pushy."""
+
+    response = LLM.invoke([SystemMessage(content=system), *state["messages"]])
+
+    return {
+      "messages": [AIMessage(content=f"[Sales] {response.content}")],
+      "current_agent": "sales_complete",
+    }
+
+  def support_agent(state: HandoffState) -> dict:
+    """Technical support specialist."""
+    system = f"""You are a technical support specialist. Context from triage: {state.get("context_summary", "None")}
+
+        Help the customer with technical issues.
+        Be patient and provide step-by-step guidance."""
+
+    response = LLM.invoke([SystemMessage(content=system), *state["messages"]])
+
+    return {
+      "messages": [AIMessage(content=f"[Support] {response.content}")],
+      "current_agent": "support_complete",
+    }
+
+  def billing_agent(state: HandoffState) -> dict:
+    """Billing specialist."""
+    system = f"""You are a billing specialist. Context from triage: {state.get("context_summary", "None")}
+
+        Help the customer with billing questions.
+        Be clear about policies and next steps."""
+
+    response = LLM.invoke([SystemMessage(content=system), *state["messages"]])
+
+    return {
+      "messages": [AIMessage(content=f"[Billing] {response.content}")],
+      "current_agent": "billing_complete",
+    }
+
+  def route_from_triage(state: HandoffState) -> str:
+    agent = state["current_agent"]
+    if agent in ["sales", "support", "billing"]:
+      return agent
+    return "end"
 
   def triage_agent(state: HandoffState) -> dict:
     """Initial triage to route customer."""
@@ -47,14 +103,13 @@ def create_customer_service_system():
 
         Analyze the customer's message and decide where to route them."""
 
-    handoff_llm = llm.with_structured_output(HandoffDecision)
-
+    handoff_llm = LLM.with_structured_output(HandoffDecision)
     messages = [SystemMessage(content=system)] + state["messages"]
     decision = handoff_llm.invoke(messages)
 
     if decision.handoff_to == "end":
       # Answer directly
-      response = llm.invoke(
+      response = LLM.invoke(
         [
           SystemMessage(content="Provide a brief, helpful response to the customer."),
           *state["messages"],
@@ -73,54 +128,6 @@ def create_customer_service_system():
         AIMessage(content=f"[Triage] Transferring to {decision.handoff_to}: {decision.reason}")
       ],
     }
-
-  def sales_agent(state: HandoffState) -> dict:
-    """Sales specialist."""
-    system = f"""You are a sales specialist. Context from triage: {state.get("context_summary", "None")}
-
-            Help the customer with product questions and purchases.
-            Be helpful and informative, not pushy."""
-
-    response = llm.invoke([SystemMessage(content=system), *state["messages"]])
-
-    return {
-      "messages": [AIMessage(content=f"[Sales] {response.content}")],
-      "current_agent": "sales_complete",
-    }
-
-  def support_agent(state: HandoffState) -> dict:
-    """Technical support specialist."""
-    system = f"""You are a technical support specialist. Context from triage: {state.get("context_summary", "None")}
-
-        Help the customer with technical issues.
-        Be patient and provide step-by-step guidance."""
-
-    response = llm.invoke([SystemMessage(content=system), *state["messages"]])
-
-    return {
-      "messages": [AIMessage(content=f"[Support] {response.content}")],
-      "current_agent": "support_complete",
-    }
-
-  def billing_agent(state: HandoffState) -> dict:
-    """Billing specialist."""
-    system = f"""You are a billing specialist. Context from triage: {state.get("context_summary", "None")}
-
-        Help the customer with billing questions.
-        Be clear about policies and next steps."""
-
-    response = llm.invoke([SystemMessage(content=system), *state["messages"]])
-
-    return {
-      "messages": [AIMessage(content=f"[Billing] {response.content}")],
-      "current_agent": "billing_complete",
-    }
-
-  def route_from_triage(state: HandoffState) -> str:
-    agent = state["current_agent"]
-    if agent in ["sales", "support", "billing"]:
-      return agent
-    return "end"
 
   graph = StateGraph(HandoffState)
 
@@ -143,22 +150,26 @@ def create_customer_service_system():
   return graph.compile()
 
 
+# Handoff DEMO
 def demo_handoffs():
   """Demo customer service handoffs."""
 
-  agent = create_customer_service_system()
+  print("\n\033[94mCustomer Service Handoff Demo:\033[0m")
 
-  print("Customer Service Handoff Demo:\n")
+  agent = create_customer_service_system()
+  save_graph_png(agent, "graph7_handoffs.png")
 
   queries = [
     "My app keeps crashing when I try to upload photos",
     "I want to upgrade to the premium plan",
     "I was charged twice for my subscription",
+    "I want to create new premium plan account",
+    "How to unsubscribe my plan",
     "What time do you close?",
   ]
 
   for query in queries:
-    print(f"Customer: {query}")
+    print(f"\033[92m\nCustomer Query: {query}\033[0m")
 
     result = agent.invoke(
       {
@@ -169,11 +180,16 @@ def demo_handoffs():
       }
     )
 
-    for msg in result["messages"]:
+    for i, msg in enumerate(result["messages"]):
       if isinstance(msg, AIMessage):
-        print(f"  {msg.content[:150]}...")
+        intro, _, rest = msg.content.partition("\n\n")
+        print(f"{i}. {intro}")
+        if rest:
+          tag_match = re.match(r"\[(\w+)\]", intro)
+          agent_name = tag_match.group(1) if tag_match else "Agent"
+          print(f"\033[93m\n{agent_name} replied:\033[0m\n{rest}")
 
-    print("-" * 50)
+    # print("\n")
 
 
 if __name__ == "__main__":
