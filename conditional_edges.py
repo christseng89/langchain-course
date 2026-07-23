@@ -7,7 +7,21 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
-llm = init_chat_model("gpt-4o-mini", temperature=0.0)
+LLM = init_chat_model("gpt-4o-mini", temperature=0.0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
 
 
 class RouterState(TypedDict):
@@ -16,16 +30,17 @@ class RouterState(TypedDict):
   response: str
 
 
+# Basic Routing
 def demo_basic_routing():
   def classify_query(state: RouterState) -> dict:
-    response = llm.invoke(
+    response = LLM.invoke(
       f"Classify this query as 'question', 'command', or 'statement'. "
       f"Reply with just the word.\n\n{state['query']}"
     )
     return {"query_type": response.content.lower().strip()}
 
   def handle_question(state: RouterState) -> dict:
-    response = llm.invoke(f"Answer this question: {state['query']}")
+    response = LLM.invoke(f"Answer this question: {state['query']}")
     return {"response": f"[Answer] {response.content}"}
 
   def handle_command(state: RouterState) -> dict:
@@ -47,12 +62,12 @@ def demo_basic_routing():
 
   graph = StateGraph(RouterState)
 
+  graph.add_edge(START, "classify")
   graph.add_node("classify", classify_query)
   graph.add_node("handle_question", handle_question)
   graph.add_node("handle_command", handle_command)
   graph.add_node("handle_statement", handle_statement)
 
-  graph.add_edge(START, "classify")
   graph.add_conditional_edges(
     "classify",  # source node
     route_by_type,  # function that determines which edge to take based on the state
@@ -63,12 +78,11 @@ def demo_basic_routing():
     },
   )
 
-  graph.add_edge("handle_question", END)
-  graph.add_edge("handle_command", END)
-  graph.add_edge("handle_statement", END)
+  for node in ["handle_question", "handle_command", "handle_statement"]:
+    graph.add_edge(node, END)
 
   app = graph.compile()
-
+  save_graph_png(app, "graph9_basic.png")
   # # visualize the graph
   # print("\n--- Mermaid Graph ---")
   # print(app.get_graph().draw_mermaid())
@@ -88,10 +102,10 @@ def demo_basic_routing():
 
   for query in queries:
     result = app.invoke({"query": query})
-    print(f"Query: {query}")
+    print(f"\033[92m\nQuery: {query}\033[0m")
     print(f"Type: {result['query_type']}")
     print(f"Response: {result['response']}")
-    print("-" * 40)
+    # print("-" * 40)
 
 
 class QualityState(TypedDict):
@@ -102,21 +116,22 @@ class QualityState(TypedDict):
   iteration: int
 
 
+# Conditional Loop DEMO
 def demo_conditional_loop():
 
   def evaluate_quality(state: QualityState) -> dict:
-    response = llm.invoke(
+    response = LLM.invoke(
       f"Rate this content quality from 1-10. Reply with just the number.\n\n"
       f"Content: {state['content']}"
     )
     try:
       score = int(response.content.strip())
-    except:
+    except Exception:
       score = 5
     return {"quality_score": score}
 
   def improve_content(state: QualityState) -> dict:
-    response = llm.invoke(
+    response = LLM.invoke(
       f"Improve this content to be more engaging and clear:\n\n{state['content']}"
     )
     return {"content": response.content, "iteration": state["iteration"] + 1}
@@ -128,20 +143,17 @@ def demo_conditional_loop():
     }
 
   def should_continue(state: QualityState) -> Literal["improve", "finalize"]:
-    if state["quality_score"] >= 7:
-      return "finalize"
-    elif state["iteration"] >= 3:
-      return "finalize"  # Max iterations
+    if state["quality_score"] >= 8 or state["iteration"] >= 3:
+      return "finalize"  # score threshold met, or max iterations reached
     else:
       return "improve"
 
   graph = StateGraph(QualityState)
 
+  graph.add_edge(START, "evaluate")
   graph.add_node("evaluate", evaluate_quality)
   graph.add_node("improve", improve_content)
   graph.add_node("finalize", finalize_content)
-
-  graph.add_edge(START, "evaluate")
 
   graph.add_conditional_edges(
     "evaluate", should_continue, {"improve": "improve", "finalize": "finalize"}
@@ -151,35 +163,45 @@ def demo_conditional_loop():
   graph.add_edge("finalize", END)
 
   app = graph.compile()
+  save_graph_png(app, "graphA_conditional.png")
 
-  # visualize the graph
-  print("\n--- Mermaid Graph ---")
-  print(app.get_graph().draw_mermaid())
+  # # visualize the graph
+  # print("\n--- Mermaid Graph ---")
+  # print(app.get_graph().draw_mermaid())
 
-  # save as PNG
-  png_bytes = app.get_graph().draw_mermaid_png()
-  with open("graph_newest.png", "wb") as f:
-    f.write(png_bytes)
-  print("\nGraph saved to graph_newest.png")
+  # # save as PNG
+  # png_bytes = app.get_graph().draw_mermaid_png()
+  # with open("graph_newest.png", "wb") as f:
+  #   f.write(png_bytes)
+  # print("\nGraph saved to graph_newest.png")
 
   # Example usage
-  print("\nConditional Loop Demo:\n")
+  # print("\nConditional Loop Demo:\n")
 
-  result = app.invoke(
-    {
-      "content": "AI is cool",
-      "quality_score": 0,
-      "feedback": "",
-      "final_content": "",
-      "iteration": 0,
-    }
-  )
+  contents = [
+    "AI is cool",
+    "it good",
+    "Our AI-powered platform streamlines your workflow, saving you hours every week while reducing costly errors.",
+  ]
 
-  print("Original: AI is cool")
-  print(f"Final: {result['final_content'][:200]}...")
-  print(f"Feedback: {result['feedback']}")
+  for content in contents:
+    # content = "AI is cool"
+    result = app.invoke(
+      {
+        "content": content,
+        "quality_score": 0,
+        "feedback": "",
+        "final_content": "",
+        "iteration": 0,
+      }
+    )
+
+    print(f"\033[92m\nContent: {content}\033[0m")
+    print(f"Final: {result['final_content']}")
+    print(f"\033[38;5;208mFeedback: {result['feedback']}\033[0m")
 
 
+# Multi Path Routing DEMO
 def demo_multi_path_routing():
   class TaskState(TypedDict):
     task: str
@@ -190,12 +212,12 @@ def demo_multi_path_routing():
 
   def analyze_task(state: TaskState) -> dict:
     # Analyze urgency
-    urgency_response = llm.invoke(
+    urgency_response = LLM.invoke(
       f"Is this task urgent? Reply 'urgent' or 'normal'.\nTask: {state['task']}"
     )
 
     # Analyze complexity
-    complexity_response = llm.invoke(
+    complexity_response = LLM.invoke(
       f"Is this task complex? Reply 'complex' or 'simple'.\nTask: {state['task']}"
     )
 
@@ -228,7 +250,9 @@ def demo_multi_path_routing():
       "result": "Added to standard queue",
     }
 
-  def route_task(state: TaskState) -> str:
+  def route_task(
+    state: TaskState,
+  ) -> Literal["urgent_complex", "urgent_simple", "normal_complex", "normal_simple"]:
     is_urgent = "urgent" in state["urgency"]
     is_complex = "complex" in state["complexity"]
 
@@ -243,13 +267,13 @@ def demo_multi_path_routing():
 
   graph = StateGraph(TaskState)
 
+  graph.add_edge(START, "analyze")
   graph.add_node("analyze", analyze_task)
   graph.add_node("urgent_complex", urgent_complex_handler)
   graph.add_node("urgent_simple", urgent_simple_handler)
   graph.add_node("normal_complex", normal_complex_handler)
   graph.add_node("normal_simple", normal_simple_handler)
 
-  graph.add_edge(START, "analyze")
   graph.add_conditional_edges(
     "analyze",
     route_task,
@@ -266,35 +290,44 @@ def demo_multi_path_routing():
 
   app = graph.compile()
 
-  # visualize the graph
-  print("\n--- Mermaid Graph ---")
-  print(app.get_graph().draw_mermaid())
+  save_graph_png(app, "graphB_complex.png")
+  # # visualize the graph
+  # print("\n--- Mermaid Graph ---")
+  # print(app.get_graph().draw_mermaid())
 
-  # save as PNG
-  png_bytes = app.get_graph().draw_mermaid_png()
-  with open("graph_complex.png", "wb") as f:
-    f.write(png_bytes)
-  print("\nGraph saved to graph_complex.png")
+  # # save as PNG
+  # png_bytes = app.get_graph().draw_mermaid_png()
+  # with open("graph_complex.png", "wb") as f:
+  #   f.write(png_bytes)
+  # print("\nGraph saved to graph_complex.png")
 
-  print("\nMulti-Path Routing Demo:\n")
+  # print("\nMulti-Path Routing Demo:\n")
 
   tasks = [
     "Server is down! Need immediate fix!",
     "Update the documentation for the API",
     "Redesign the entire database schema",
     "Fix the typo on the homepage",
+    "Bug fixing",
+    "Enhancement",
   ]
 
   for task in tasks:
+    print(f"\033[92m\nTask: {task}\033[0m")
+
     result = app.invoke({"task": task})
-    print(f"Task: {task}")
     print(f"Urgency: {result['urgency']} | Complexity: {result['complexity']}")
     print(f"Handler: {result['handler']}")
-    print(f"Result: {result['result']}")
-    print("-" * 40)
+    print(f"\033[38;5;208mResult: {result['result']}\033[0m")
+    # print("-" * 40)
 
 
 if __name__ == "__main__":
-  # demo_basic_routing()
-  # demo_conditional_loop()
+  print_section("Basic Literal Routing")
+  demo_basic_routing()
+
+  print_section("Conditional Literal Loop")
+  demo_conditional_loop()
+
+  print_section("Multi-Path Routing")
   demo_multi_path_routing()
