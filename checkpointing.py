@@ -5,6 +5,7 @@ Save and resume agent state
 
 import operator
 import tempfile
+from datetime import datetime
 
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -16,56 +17,89 @@ from typing_extensions import Annotated, TypedDict
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0.0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
 
 
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
+
+
+def to_local(iso_timestamp: str) -> str:
+  """Convert a checkpoint's UTC ISO timestamp to the system's local time."""
+  return datetime.fromisoformat(iso_timestamp).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+# Chat State
 class ChatState(TypedDict):
   messages: Annotated[list[BaseMessage], operator.add]
 
 
+#                 BaseMessage
+#                      ▲
+#      ┌────────┬────────┬──────────┬─────────┐
+#      │        │        │          │         │
+# HumanMessage AIMessage SystemMessage ToolMessage
+
+# [
+#     SystemMessage("You are a banking expert."),
+#     HumanMessage("Issue an LC."),
+#     AIMessage("Please provide the beneficiary."),
+#     ToolMessage("Customer information retrieved.")
+# ]
+
+
+# Demo Memory Saver
 def demo_memory_saver():
   """In-memory checkpointing for development."""
 
   def chat(state: ChatState) -> dict:
-    response = llm.invoke(state["messages"])
+    response = LLM.invoke(state["messages"])
     return {"messages": [response]}
 
   graph = StateGraph(ChatState)
-
   graph.add_node("chat", chat)
+
   graph.add_edge(START, "chat")
   graph.add_edge("chat", END)
 
-  saver = MemorySaver()
-  app = graph.compile(checkpointer=saver)
+  app = graph.compile(checkpointer=MemorySaver())
+  save_graph_png(app, "graphG1_memory_server.png")
 
   # Configuration with thread_id
-  config = {"configurable": {"thread_id": "user-123"}}
+  config = {"configurable": {"thread_id": "chat-user-123"}}
+  messages = ["My name is Paulo", "What's my name?"]
 
-  print("Memory Saver Demo (Multi-turn conversation):\n")
-
-  # Turn 1
-  result = app.invoke({"messages": [HumanMessage(content="My name is Paulo")]}, config)
-  print(f"Turn 1 - AI: {result['messages'][-1].content}")
-
-  # Turn 2 - Conversation continues
-  result = app.invoke({"messages": [HumanMessage(content="What's my name?")]}, config)
-  print(f"Turn 2 - AI: {result['messages'][-1].content}")
+  for i, message in enumerate(messages):
+    print(f"\033[92mTurn {i + 1}, Query: {message}\033[0m")
+    result = app.invoke({"messages": [HumanMessage(content=message)]}, config)
+    print(f"AI: {result['messages'][-1].content}\n")
 
   # Check full history
   state = app.get_state(config)
-  print(f"\nTotal messages in state: {len(state.values['messages'])}")
+  print(f"\033[93mTotal messages in state: {len(state.values['messages'])}\033[0m")
 
 
+# DEMO SqLite Persistence
 def demo_sqlite_persistence():
   """SQLite persistence for durable storage."""
 
   def chat(state: ChatState) -> dict:
-    response = llm.invoke(state["messages"])
+    response = LLM.invoke(state["messages"])
     return {"messages": [response]}
 
   graph = StateGraph(ChatState)
   graph.add_node("chat", chat)
+
   graph.add_edge(START, "chat")
   graph.add_edge("chat", END)
 
@@ -73,114 +107,129 @@ def demo_sqlite_persistence():
   with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
     db_path = f.name
 
-  print("\nSQLite Persistence Demo:")
-  print(f"Database: {db_path}\n")
+  print(f"\033[93mDatabase: {db_path}\n\033[0m")
 
   # First session
-  with SqliteSaver.from_conn_string(db_path) as saver:
+  with SqliteSaver.from_conn_string(db_path) as saver:  # Use SqliteSaver as saver
     app = graph.compile(checkpointer=saver)
     config = {"configurable": {"thread_id": "persistent-user"}}
+    messages = [
+      "Remember: The secret code is ALPHA-7",
+      "What was the secret code?",
+      "My name is Paulo",
+      "What's my name?",
+    ]
 
-    result = app.invoke(
-      {"messages": [HumanMessage(content="Remember: The secret code is ALPHA-7")]},
-      config,
-    )
-    print("Session 1 - Stored secret code")
+    for i, message in enumerate(messages):
+      result = app.invoke(
+        {"messages": [HumanMessage(content=message)]},
+        config,
+      )
+      print(f"\033[92mSession {i + 1}, Message: {message}\033[0m")
+      print(f"AI: {result['messages'][-1].content}\n")
 
-    # PostgresSaver with a real database!
-    # Simulate app restart - new session
-  with SqliteSaver.from_conn_string(db_path) as saver:
-    app = graph.compile(checkpointer=saver)
-    config = {"configurable": {"thread_id": "persistent-user"}}
-
-    result = app.invoke({"messages": [HumanMessage(content="What was the secret code?")]}, config)
-    print(f"Session 2 - AI: {result['messages'][-1].content}")
+    # Check full history
+    state = app.get_state(config)
+    print(f"\033[93mTotal messages in state: {len(state.values['messages'])}\033[0m")
 
 
+# Demo Checkpoints State Inspection
 def demo_state_inspection():
   """Inspect and manipulate checkpoint state."""
 
   def chat(state: ChatState) -> dict:
-    response = llm.invoke(state["messages"])
+    response = LLM.invoke(state["messages"])
     return {"messages": [response]}
 
   graph = StateGraph(ChatState)
   graph.add_node("chat", chat)
+
   graph.add_edge(START, "chat")
   graph.add_edge("chat", END)
 
-  memory = MemorySaver()
-  app = graph.compile(checkpointer=memory)
+  app = graph.compile(checkpointer=MemorySaver())
+  save_graph_png(app, "graphG2_state_inspect.png")
+
   config = {"configurable": {"thread_id": "inspect-demo"}}
 
-  print("\nState Inspection Demo:\n")
-
   # Build up some state
-  app.invoke({"messages": [HumanMessage(content="Hello!")]}, config)
-  app.invoke({"messages": [HumanMessage(content="How are you?")]}, config)
+  queries = ["Hello!", "How are you?"]
 
-  # Get current state
-  state = app.get_state(config)
+  for i, query in enumerate(queries):
+    print(f"\n\033[92m{i + 1}. Query: {query}\033[0m")
+    app.invoke({"messages": [HumanMessage(content=query)]}, config)
 
-  print("Current state:")
-  print(f"  Next node: {state.next}")
-  print(f"  Message count: {len(state.values['messages'])}")
+    # Get current state
+    state = app.get_state(config)
 
-  # Get state history
-  print("\nState history:")
-  for i, snapshot in enumerate(app.get_state_history(config)):
-    print(f"  Checkpoint {i}: {len(snapshot.values['messages'])} messages")
-    if i >= 3:
-      print("  ...")
-      break
+    print("\n\033[93mCurrent state:\033[0m")
+    print(f"Next node: {state.next}")
+    print(f"Message count: {len(state.values['messages'])}")
+
+    # Get state history
+    history = list(app.get_state_history(config))
+    print(f"\n\033[92mState History with {len(history)} checkpoints\033[0m")
+    for i, snapshot in enumerate(history):
+      step = snapshot.metadata.get("step")
+      source = snapshot.metadata.get("source")
+      print(
+        f"Checkpoint {i + 1}: {len(snapshot.values['messages'])} messages "
+        f"(step={step}, \tsource={source}, \tnext={snapshot.next})"
+      )
+
+      # 出現兩個「2 messages」(Checkpoint 3 跟 Checkpoint 4) 是兩次 invoke() 呼叫的交界點
 
 
+# DEMO Branching Conversations
 def demo_branching_conversations():
   """Branch conversations from checkpoints."""
 
   def chat(state: ChatState) -> dict:
-    response = llm.invoke(state["messages"])
+    response = LLM.invoke(state["messages"])
     return {"messages": [response]}
 
   graph = StateGraph(ChatState)
   graph.add_node("chat", chat)
+
   graph.add_edge(START, "chat")
   graph.add_edge("chat", END)
 
-  memory = MemorySaver()
-  app = graph.compile(checkpointer=memory)
+  app = graph.compile(checkpointer=MemorySaver())
+  save_graph_png(app, "graphG3_branch_conversations.png")
 
-  print("\nBranching Conversations Demo:\n")
+  # Conversations
+  conversations = [
+    {"chat": "Main", "thread_id": "main", "content": "What's the weather like?"},
+    {
+      "chat": "Branch A (Beach)",
+      "thread_id": "branch-beach",
+      "content": "What about a beach vacation?",
+    },
+    {
+      "chat": "Branch B (Mountain Hiking)",
+      "thread_id": "branch-mountain",
+      "content": "What about mountain hiking? in Chinese.",
+    },
+  ]
 
-  # Main conversation
-  main_config = {"configurable": {"thread_id": "main"}}
-  app.invoke({"messages": [HumanMessage(content="What's the weather like?")]}, main_config)
+  main_state = None
+  for i, conv in enumerate(conversations):
+    print(f"\033[92m\nChat: {conv['chat']}, Content: {conv['content']}\033[0m")
+    config = {"configurable": {"thread_id": conv["thread_id"]}}
 
-  # Get checkpoint to branch from
-  main_state = app.get_state(main_config)
+    if i == 0:
+      # Main conversation
+      result = app.invoke({"messages": [HumanMessage(content=conv["content"])]}, config)
+      main_state = app.get_state(config)
+    else:
+      # Branch - copy Main state to this new thread, then diverge
+      app.update_state(config, main_state.values)
+      result = app.invoke({"messages": [HumanMessage(content=conv["content"])]}, config)
 
-  # Branch A - Beach vacation
-  branch_a_config = {"configurable": {"thread_id": "branch-beach"}}
-  # Copy state to new thread
-  app.update_state(branch_a_config, main_state.values)
-
-  result_a = app.invoke(
-    {"messages": [HumanMessage(content="What about a beach vacation?")]},
-    branch_a_config,
-  )
-  print(f"Branch A (Beach): {result_a['messages'][-1].content[:100]}...")
-
-  # Branch B - Mountain adventure
-  branch_b_config = {"configurable": {"thread_id": "branch-mountain"}}
-  app.update_state(branch_b_config, main_state.values)
-
-  result_b = app.invoke(
-    {"messages": [HumanMessage(content="What about mountain hiking?")]},
-    branch_b_config,
-  )
-  print(f"Branch B (Mountain): {result_b['messages'][-1].content[:100]}...")
+    print(f"\n\033[93mResult:\033[0m\n{result['messages'][-1].content}")
 
 
+# DEMO Checkpoint Internals
 def demo_checkpoint_internals():
   """
   Peek inside a checkpoint — see exactly what LangGraph saves.
@@ -196,36 +245,32 @@ def demo_checkpoint_internals():
     step: str
 
   def analyze(state: TaskState) -> dict:
-    response = llm.invoke(state["messages"])
+    response = LLM.invoke(state["messages"])
     return {"messages": [response], "step": "analyzed"}
 
   def summarize(state: TaskState) -> dict:
     summary_prompt = [
       HumanMessage(content=f"Summarize this in one sentence: {state['messages'][-1].content}")
     ]
-    response = llm.invoke(summary_prompt)
+    response = LLM.invoke(summary_prompt)
     return {"messages": [response], "step": "summarized"}
 
   graph = StateGraph(TaskState)
   graph.add_node("analyze", analyze)
   graph.add_node("summarize", summarize)
+
   graph.add_edge(START, "analyze")
   graph.add_edge("analyze", "summarize")
   graph.add_edge("summarize", END)
 
-  memory = MemorySaver()
-  app = graph.compile(checkpointer=memory)
+  app = graph.compile(checkpointer=MemorySaver())
+  save_graph_png(app, "graphG4_checkpoint_internal.png")
+
   config = {"configurable": {"thread_id": "internals-demo"}}
-
-  print("\nCheckpoint Internals Demo")
-  print("=" * 55)
-  print("Graph: START -> [analyze] -> [summarize] -> END")
-  print("=" * 55)
-
-  # ── Run the graph ──
-
+  content = "Explain why the sky is blue"
+  print(f"\n\033[92mQuery: {content}\033[0m")
   app.invoke(
-    {"messages": [HumanMessage(content="Explain why the sky is blue")], "step": ""},
+    {"messages": [HumanMessage(content=content)], "step": ""},
     config,
   )
 
@@ -233,78 +278,70 @@ def demo_checkpoint_internals():
   # PART 1: What's in the CURRENT state snapshot?
   # ════════════════════════════════════════════════════════
 
-  print("\n--- PART 1: Current State Snapshot (app.get_state) ---\n")
+  print("\033[93m\nPART 1: Current State Snapshot (app.get_state)\n\033[0m")
 
   state = app.get_state(config)
 
   # state.values — your actual TypedDict data
-  print("1) state.values (your state data):")
+  print("\033[38;5;208m1) state.values (your state data):\033[0m")
   print(f"   step: '{state.values['step']}'")
-  print(f"   messages: {len(state.values['messages'])} total")
+  print(f"   messages: {len(state.values['messages'])} total\n")
   for i, msg in enumerate(state.values["messages"]):
     role = "Human" if isinstance(msg, HumanMessage) else "AI"
-    print(f"     [{i}] {role}: {msg.content[:80]}...")
+    print(f"\033[38;5;208m[{i + 1}]. {role}:\033[0m\n{msg.content}\n")
 
   # state.next — which node runs next (empty = graph finished)
-  print("\n2) state.next (pending node):")
+  print("\033[38;5;208m2) state.next (pending node):\033[0m")
   print(f"   {state.next if state.next else '() — graph finished, no pending nodes'}")
 
   # state.config — the config that produced this snapshot
-  print("\n3) state.config (thread + checkpoint IDs):")
+  print("\033[38;5;208m\n3) state.config (thread + checkpoint IDs):\033[0m")
   print(f"   thread_id:     {state.config['configurable']['thread_id']}")
   print(f"   checkpoint_id: {state.config['configurable']['checkpoint_id']}")
 
   # state.metadata — who created this checkpoint
-  print("\n4) state.metadata (provenance info):")
+  print("\033[38;5;208m\n4) state.metadata (provenance info):\033[0m")
   print(f"   source:  {state.metadata.get('source', 'N/A')}")
   print(f"   step:    {state.metadata.get('step', 'N/A')}")
   print(f"   writes:  {state.metadata.get('writes', 'N/A')}")
 
   # state.parent_config — pointer to the PREVIOUS checkpoint
-  print("\n5) state.parent_config (previous checkpoint):")
+  print("\033[38;5;208m\n5) state.parent_config (previous checkpoint):\033[0m")
   if state.parent_config:
     print(f"   parent checkpoint_id: {state.parent_config['configurable']['checkpoint_id']}")
   else:
     print("   None — this is the very first checkpoint")
 
   # state.created_at — timestamp
-  print("\n6) state.created_at (when saved):")
-  print(f"   {state.created_at}")
+  print("\033[38;5;208m\n6) state.created_at (when saved):\033[0m")
+  print(f"   {state.created_at}  (UTC)")
+  print(f"   {to_local(state.created_at)}  (local)")
 
   # ════════════════════════════════════════════════════════
   # PART 2: Walk through ALL checkpoints (time travel)
   # ════════════════════════════════════════════════════════
 
-  print("\n--- PART 2: Full Checkpoint History (app.get_state_history) ---\n")
-  print("LangGraph saves a checkpoint at EACH step. Let's see them all:\n")
+  print("\033[93m\nPART 2: Full Checkpoint History (app.get_state_history)\n\033[0m")
 
   for i, snapshot in enumerate(app.get_state_history(config)):
-    step_num = snapshot.metadata.get("step", "?")
-    source = snapshot.metadata.get("source", "?")
     writes = snapshot.metadata.get("writes", {})
-    msg_count = len(snapshot.values.get("messages", []))
-    checkpoint_id = snapshot.config["configurable"]["checkpoint_id"]
-    current_step = snapshot.values.get("step", "")
-
-    # Which node just wrote to this checkpoint?
     node_name = list(writes.keys())[0] if writes else "—"
 
-    print(f"  Checkpoint {i}:")
-    print(f"    id:         {checkpoint_id[:30]}...")
-    print(f"    source:     {source}")
-    print(f"    step:       {step_num}")
-    print(f"    written by: {node_name}")
-    print(f"    state.step: '{current_step}'")
-    print(f"    messages:   {msg_count}")
-    print(f"    next:       {snapshot.next if snapshot.next else '() — finished'}")
-    print(f"    created_at: {snapshot.created_at}")
-    print()
+    print(f"\033[38;5;208mCheckpoint {i + 1}:\033[0m")
+    print(f"  id:         {snapshot.config['configurable']['checkpoint_id'][:30]}...")
+    print(f"  source:     {snapshot.metadata.get('source', '?')}")
+    print(f"  step:       {snapshot.metadata.get('step', '?')}")
+    print(f"  state.step: '{snapshot.values.get('step', '')}'")
+    print(f"  messages:   {len(snapshot.values.get('messages', []))}")
+    print(f"  next:       {snapshot.next if snapshot.next else '() — finished'}")
+    print(f"  created_at: {to_local(snapshot.created_at)}  (local)")
+    print(f"  written by: {node_name}")
 
   # ════════════════════════════════════════════════════════
   # PART 3: Jump to a specific checkpoint (rewind)
   # ════════════════════════════════════════════════════════
 
-  print("--- PART 3: Rewind — Jump to a Previous Checkpoint ---\n")
+  print("\033[93m\nPART 3: Rewind — Jump to a Previous Checkpoint\n\033[0m")
 
   # Find the checkpoint right after the "analyze" node ran
   target_snapshot = None
@@ -322,9 +359,8 @@ def demo_checkpoint_internals():
 
     # You can resume from this exact checkpoint
     rewind_config = {"configurable": {"thread_id": "internals-demo", "checkpoint_id": target_id}}
-
-    rewound_state = app.get_state(rewind_config)
-    print(f"\n  Loaded checkpoint — next node would be: {rewound_state.next}")
+    rewind_state = app.get_state(rewind_config)
+    print(f"\n  Loaded checkpoint — next node would be: {rewind_state.next}")
     print("  We're back to BEFORE 'summarize' ran!")
     print("  Calling invoke(None) from here would re-run 'summarize' with fresh output.")
   else:
@@ -334,9 +370,7 @@ def demo_checkpoint_internals():
   # SUMMARY: Anatomy of a checkpoint
   # ════════════════════════════════════════════════════════
 
-  print("\n" + "=" * 55)
-  print("  CHECKPOINT ANATOMY — What Gets Saved")
-  print("=" * 55)
+  print("\033[91m\nCHECKPOINT ANATOMY — What Gets Saved\033[0m")
   print(
     """
     state.values        → Your TypedDict data (messages, step, etc.)
@@ -360,8 +394,17 @@ def demo_checkpoint_internals():
 
 
 if __name__ == "__main__":
-  # demo_memory_saver()
-  # demo_sqlite_persistence()
-  # demo_state_inspection()
-  # demo_branching_conversations()
+  print_section("Memory Saver Demo (Multi-turn conversation)")
+  demo_memory_saver()
+
+  print_section("SQLite Persistence Demo")
+  demo_sqlite_persistence()
+
+  print_section("Checkpoints State Inspection Demo")
+  demo_state_inspection()
+
+  print_section("Branching Conversations Demo")
+  demo_branching_conversations()
+
+  print_section("Checkpoint Internals Demo")
   demo_checkpoint_internals()
