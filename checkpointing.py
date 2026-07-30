@@ -380,12 +380,12 @@ def demo_checkpoint_internals():
     state.metadata      → source, step number, which node wrote
     state.created_at    → Timestamp of when this checkpoint was saved
 
-    Checkpoints are saved:
+    \033[93mCheckpoints are saved:\033[0m
       1. BEFORE the first node runs (initial input state)
       2. AFTER each node completes (with updated state)
       3. At interrupt points (frozen state for human-in-the-loop)
 
-    Think of it as a linked list of snapshots:
+    \033[93mThink of it as a linked list of snapshots:\033[0m
       [initial] --> [after analyze] --> [after summarize]
          ^               ^                    ^
        parent          parent              current (latest)
