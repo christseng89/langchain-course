@@ -17,6 +17,38 @@ from typing_extensions import Annotated, TypedDict
 load_dotenv()
 
 
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
+
+
+SYSTEM_PROMPT = """You are a supervisor managing a team of specialists:
+
+        1. researcher - Gathers information and facts
+        2. writer - Creates content and text
+        3. critic - Reviews and improves work
+
+        Based on the conversation, decide which agent should act next.
+        If the task is complete, respond with FINISH.
+
+        Current conversation shows the progress so far."""
+
+RESEARCHER_PROMPT = """You are a research specialist. Gather facts and information relevant to the task. Be thorough but concise."""
+WRITER_PROMPT = """You are a writing specialist. Create clear, engaging content based on the available information."""
+CRITIC_PROMPT = """You are a quality critic. Review the work and provide constructive feedback. If the work is good, say so."""
+
+PRINT_MESSAGE = False  # Set to True to print messages from each agent
+PRINT_SUPERVISOR_ONLY = True  # Set to True to print only supervisor routing decisions
+
+
 class SupervisorState(TypedDict):
   messages: Annotated[list[BaseMessage], add_messages]
   next_agent: str
@@ -24,7 +56,8 @@ class SupervisorState(TypedDict):
   final_response: str
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
 
 
 def create_supervisor_system():
@@ -37,23 +70,11 @@ def create_supervisor_system():
     )
     reasoning: str = Field(description="Why this agent was chosen")
 
-  supervisor_llm = llm.with_structured_output(RouteDecision)
+  supervisor_llm = LLM.with_structured_output(RouteDecision)
 
   # Supervisor node
   def supervisor(state: SupervisorState) -> dict:
-    system_prompt = """You are a supervisor managing a team of specialists:
-
-        1. researcher - Gathers information and facts
-        2. writer - Creates content and text
-        3. critic - Reviews and improves work
-
-        Based on the conversation, decide which agent should act next.
-        If the task is complete, respond with FINISH.
-
-        Current conversation shows the progress so far."""
-
-    messages = [SystemMessage(content=system_prompt)] + state["messages"]
-
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
     decision = supervisor_llm.invoke(messages)
 
     if decision.next == "FINISH":
@@ -70,10 +91,7 @@ def create_supervisor_system():
   def researcher(state: SupervisorState) -> dict:
     prompt = ChatPromptTemplate.from_messages(
       [
-        (
-          "system",
-          "You are a research specialist. Gather facts and information relevant to the task. Be thorough but concise.",
-        ),
+        ("system", RESEARCHER_PROMPT),
         (
           "human",
           "Task context:\n{context}\n\nProvide your research findings.",
@@ -83,40 +101,38 @@ def create_supervisor_system():
 
     # Get task from first human message
     task = next((m.content for m in state["messages"] if isinstance(m, HumanMessage)), "")
-
-    response = llm.invoke(prompt.format_messages(context=task))
-
+    if PRINT_MESSAGE:
+      print(f"\n\033[38;5;180m[Researcher] Task context:\033[0m\n{task}")
+    response = LLM.invoke(prompt.format_messages(context=task))
     return {"messages": [AIMessage(content=f"[Researcher] {response.content}")]}
 
   def writer(state: SupervisorState) -> dict:
     prompt = ChatPromptTemplate.from_messages(
       [
-        (
-          "system",
-          "You are a writing specialist. Create clear, engaging content based on the available information.",
-        ),
+        ("system", WRITER_PROMPT),
         ("human", "Previous work:\n{context}\n\nWrite the content."),
       ]
     )
 
     context = "\n".join([m.content for m in state["messages"][-5:]])
-    response = llm.invoke(prompt.format_messages(context=context))
+    if PRINT_MESSAGE:
+      print(f"\n\033[38;5;180m[Writer] Context for writing:\033[0m\n{context}")
+    response = LLM.invoke(prompt.format_messages(context=context))
 
     return {"messages": [AIMessage(content=f"[Writer] {response.content}")]}
 
   def critic(state: SupervisorState) -> dict:
     prompt = ChatPromptTemplate.from_messages(
       [
-        (
-          "system",
-          "You are a quality critic. Review the work and provide constructive feedback. If the work is good, say so.",
-        ),
+        ("system", CRITIC_PROMPT),
         ("human", "Work to review:\n{context}\n\nProvide your critique."),
       ]
     )
 
     context = "\n".join([m.content for m in state["messages"][-3:]])
-    response = llm.invoke(prompt.format_messages(context=context))
+    if PRINT_MESSAGE:
+      print(f"\n\033[38;5;180m[Critic] Context for review:\033[0m\n{context}")
+    response = LLM.invoke(prompt.format_messages(context=context))
 
     return {"messages": [AIMessage(content=f"[Critic] {response.content}")]}
 
@@ -135,6 +151,7 @@ def create_supervisor_system():
       return "finalize"
     return state["next_agent"]
 
+  # 任务可能被判断为需要先查资料, 才出现 [Researcher]
   graph = StateGraph(SupervisorState)
   graph.add_node("supervisor", supervisor)
   graph.add_node("researcher", researcher)
@@ -142,7 +159,7 @@ def create_supervisor_system():
   graph.add_node("critic", critic)
   graph.add_node("finalize", finalize)
 
-  graph.add_edge(START, "supervisor")
+  graph.add_edge(START, "researcher")  # researcher is mandatory and always runs first
 
   graph.add_conditional_edges(
     "supervisor",
@@ -154,64 +171,81 @@ def create_supervisor_system():
       "finalize": "finalize",
     },
   )
-
   # After each specialist, go back to supervisor
   graph.add_edge("researcher", "supervisor")
   graph.add_edge("writer", "supervisor")
   graph.add_edge("critic", "supervisor")
   graph.add_edge("finalize", END)
 
-  return graph.compile()
+  app = graph.compile()
+  save_graph_png(app, "GraphI_supervisor_graph.png")
+
+  return app
 
 
+# DEMO: Supervisor Pattern
 def demo_supervisor():
   """Demo the supervisor system."""
 
-  agent = create_supervisor_system()
+  questions = [
+    "Write a short blog post about the benefits of AI in healthcare.",
+    "Write a short blog post about the benefits of AI in software development.  In Chinese",
+    # "How about a short blog post about the next generation General AI with real world examples?  In Chinese",
+  ]
 
-  print("Supervisor Agent Demo:\n")
+  for question in questions:
+    print(f"\033[92mQuestion: {question}\033[0m\n")
+    agent = create_supervisor_system()
+    result = agent.invoke(
+      {
+        "messages": [HumanMessage(content=question)],
+        "next_agent": "",
+        "task_complete": False,
+        "final_response": "",
+      }
+    )
 
-  result = agent.invoke(
-    {
-      "messages": [
-        HumanMessage(content="Write a short blog post about the benefits of AI in healthcare")
-      ],
-      "next_agent": "",
-      "task_complete": False,
-      "final_response": "",
-    }
-  )
+    print("\n\033[93mRouting Decisions:\033[0m")
+    for i, msg in enumerate(result["messages"]):
+      # if isinstance(msg, AIMessage) and "[Supervisor]" in msg.content:
+      print(f"\n\033[38;5;180m{i + 1}). \033[0m{msg.content}")
 
-  print("Agent conversation:")
-  for msg in result["messages"]:
-    if isinstance(msg, AIMessage):
-      print(f"\n{msg.content[:200]}...")
-
-  print(f"\n\nFinal Response:\n{result['final_response']}")
+    print(f"\n\033[93mFinal Response:\033[0m\n{result['final_response']}\n")
 
 
+# DEMO: Supervisor Pattern Trace
 def demo_supervisor_trace():
   """Show supervisor decision-making."""
 
+  question = "Create a marketing tagline for a new coffee brand. In Chinese"
+  print(f"\033[92mQuestion: {question}\033[0m\n")
   agent = create_supervisor_system()
-
-  print("\nSupervisor Decision Trace:\n")
-
   result = agent.invoke(
     {
-      "messages": [HumanMessage(content="Create a marketing tagline for a new coffee brand")],
+      "messages": [HumanMessage(content=question)],
       "next_agent": "",
       "task_complete": False,
       "final_response": "",
     }
   )
 
-  print("Routing decisions:")
-  for msg in result["messages"]:
-    if isinstance(msg, AIMessage) and "[Supervisor]" in msg.content:
-      print(f"  → {msg.content}")
+  print(f"\n\033[93mRouting Decisions Trace, Total Messages: {len(result['messages'])}\033[0m")
+
+  # Print only the supervisor routing decisions
+  for i, msg in enumerate(result["messages"]):
+    if PRINT_SUPERVISOR_ONLY:
+      if "[Supervisor]" in msg.content:
+        print(f"\n\033[38;5;180m{i + 1}). {type(msg).__name__}\033[0m:\n{msg.content}")
+    else:
+      print(f"\n\033[38;5;180m{i + 1}). {type(msg).__name__}\033[0m:\n{msg.content}")
+
+  final_response = result.get("final_response", "")
+  print(f"\n\033[93mFinal Response:\033[0m\n{final_response}\n")
 
 
 if __name__ == "__main__":
+  # print_section("Demo Supervisor")
   # demo_supervisor()
+
+  print_section("Demo Supervisor Trace")
   demo_supervisor_trace()
