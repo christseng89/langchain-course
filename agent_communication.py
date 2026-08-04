@@ -18,6 +18,20 @@ from typing_extensions import Annotated, TypedDict
 load_dotenv()
 
 LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
 
 
 # ============================================================
@@ -412,8 +426,11 @@ def demo_blackboard():
 
 
 if __name__ == "__main__":
-  # demo_shared_state()
-  # print("\n" + "=" * 50 + "\n")
-  # demo_message_passing()
-  # print("\n" + "=" * 50 + "\n")
+  print_section("Demo Shared State")
+  demo_shared_state()
+
+  print_section("Demo Message Passing")
+  demo_message_passing()
+
+  print_section("Demo Blackboard")
   demo_blackboard()
