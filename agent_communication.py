@@ -17,7 +17,7 @@ from typing_extensions import Annotated, TypedDict
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 
 # ============================================================
@@ -36,7 +36,7 @@ def create_message_passing_pipeline():
 
   def researcher(state: MessagePassingState) -> dict:
     """Researches the topic and posts findings as a message."""
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -54,7 +54,7 @@ def create_message_passing_pipeline():
 
   def fact_checker(state: MessagePassingState) -> dict:
     """Reads the researcher's message and validates the claims."""
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -73,7 +73,7 @@ def create_message_passing_pipeline():
 
   def summarizer(state: MessagePassingState) -> dict:
     """Reads all previous messages and creates a final summary."""
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -140,7 +140,7 @@ def create_shared_fields_pipeline():
 
   def data_collector(state: SharedFieldsState) -> dict:
     """Collects data and writes to the raw_data field."""
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -164,7 +164,7 @@ def create_shared_fields_pipeline():
     """Reads raw_data field, writes analysis and confidence."""
     data_summary = json.dumps(state["raw_data"], indent=2)
 
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -194,7 +194,7 @@ def create_shared_fields_pipeline():
 
   def advisor(state: SharedFieldsState) -> dict:
     """Reads analysis + confidence, writes recommendations."""
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
@@ -289,7 +289,7 @@ def create_blackboard_system():
     approved: bool = Field(description="Whether the draft is good enough")
     feedback: str = Field(description="Specific feedback if not approved")
 
-  critic_llm = llm.with_structured_output(ApprovalDecision)
+  critic_llm = LLM.with_structured_output(ApprovalDecision)
 
   def drafter(state: BlackboardState) -> dict:
     """Reads critiques from blackboard, writes improved draft."""
@@ -302,7 +302,7 @@ def create_blackboard_system():
 
     context = "\n".join(context_parts)
 
-    response = llm.invoke(
+    response = LLM.invoke(
       [
         SystemMessage(
           content=(
