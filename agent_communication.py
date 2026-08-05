@@ -40,6 +40,7 @@ def save_graph_png(app, png_file: str) -> None:
 # ============================================================
 
 
+# add_messages is used for Chat
 class MessagePassingState(TypedDict):
   messages: Annotated[list[BaseMessage], add_messages]
   current_phase: str
@@ -50,14 +51,15 @@ def create_message_passing_pipeline():
 
   def researcher(state: MessagePassingState) -> dict:
     """Researches the topic and posts findings as a message."""
+
+    content = (
+      "You are a researcher."
+      "Read the user's question, research it, and post your findings."
+      "Keep it to 2-3 sentences."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a researcher. Read the user's question, "
-            "research it, and post your findings. Keep it to 2-3 sentences."
-          )
-        ),
+        SystemMessage(content=(content)),
         *state["messages"],
       ]
     )
@@ -68,15 +70,15 @@ def create_message_passing_pipeline():
 
   def fact_checker(state: MessagePassingState) -> dict:
     """Reads the researcher's message and validates the claims."""
+
+    content = (
+      "You are a fact-checker."
+      "Read the researcher's findings in the conversation and validate or challenge them."
+      "Keep it to 2-3 sentences."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a fact-checker. Read the researcher's findings "
-            "in the conversation and validate or challenge them. "
-            "Keep it to 2-3 sentences."
-          )
-        ),
+        SystemMessage(content=(content)),
         *state["messages"],
       ]
     )
@@ -87,15 +89,15 @@ def create_message_passing_pipeline():
 
   def summarizer(state: MessagePassingState) -> dict:
     """Reads all previous messages and creates a final summary."""
+
+    content = (
+      "You are a summarizer."
+      "Read the researcher's findings and the fact-checker's review."
+      "Produce a final, accurate summary. Keep it to 2-3 sentences."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a summarizer. Read the researcher's findings and "
-            "the fact-checker's review. Produce a final, accurate summary. "
-            "Keep it to 2-3 sentences."
-          )
-        ),
+        SystemMessage(content=(content)),
         *state["messages"],
       ]
     )
@@ -118,19 +120,23 @@ def create_message_passing_pipeline():
   return graph.compile()
 
 
+# Message passing demo
 def demo_message_passing():
   """Demo message passing between agents."""
   agent = create_message_passing_pipeline()
+  save_graph_png(agent, "graphK1_message_passing.png")
 
-  print("Message Passing Demo:\n")
+  query = "What are the main benefits of renewable energy? In Chinese."
+  print(f"\n\033[32mUser query: {query}\033[0m")
 
   result = agent.invoke(
     {
-      "messages": [HumanMessage(content="What are the main benefits of renewable energy?")],
+      "messages": [HumanMessage(content=query)],
       "current_phase": "researcher",
     }
   )
 
+  print(f"\n\033[33mFinal Summary with Number of messages: {len(result['messages'])}\033[0m\n")
   for msg in result["messages"]:
     if isinstance(msg, AIMessage):
       print(f"{msg.content}\n")
@@ -139,6 +145,7 @@ def demo_message_passing():
 # ============================================================
 # Pattern 2: Shared State (Typed Fields)
 # Agents communicate through structured state fields
+# operator.add is used to combine lists from multiple agents
 # ============================================================
 class SharedFieldsState(TypedDict):
   query: str
@@ -154,15 +161,15 @@ def create_shared_fields_pipeline():
 
   def data_collector(state: SharedFieldsState) -> dict:
     """Collects data and writes to the raw_data field."""
+
+    content = (
+      "You are a data collector. Given the query, produce 3 data points "
+      "as a JSON array of objects with 'source' and 'finding' keys. "
+      "Return ONLY the JSON array, no markdown."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a data collector. Given the query, produce 3 data points "
-            "as a JSON array of objects with 'source' and 'finding' keys. "
-            "Return ONLY the JSON array, no markdown."
-          )
-        ),
+        SystemMessage(content=(content)),
         HumanMessage(content=state["query"]),
       ]
     )
@@ -170,6 +177,7 @@ def create_shared_fields_pipeline():
     try:
       data = json.loads(response.content)
     except json.JSONDecodeError:
+      # If the LLM response is not valid JSON, wrap it in a single data point
       data = [{"source": "llm", "finding": response.content}]
 
     return {"raw_data": data}
@@ -178,16 +186,15 @@ def create_shared_fields_pipeline():
     """Reads raw_data field, writes analysis and confidence."""
     data_summary = json.dumps(state["raw_data"], indent=2)
 
+    content = (
+      "You are a data analyst. Analyze the collected data and provide: "
+      "1) A brief analysis (2-3 sentences), and "
+      "2) A confidence score from 0.0 to 1.0. "
+      "Format: ANALYSIS: <text>\nCONFIDENCE: <number>"
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a data analyst. Analyze the collected data and provide: "
-            "1) A brief analysis (2-3 sentences), and "
-            "2) A confidence score from 0.0 to 1.0. "
-            "Format: ANALYSIS: <text>\nCONFIDENCE: <number>"
-          )
-        ),
+        SystemMessage(content=(content)),
         HumanMessage(content=f"Query: {state['query']}\n\nData:\n{data_summary}"),
       ]
     )
@@ -201,6 +208,7 @@ def create_shared_fields_pipeline():
       analysis = parts[0].replace("ANALYSIS:", "").strip()
       try:
         confidence = float(parts[1].strip())
+        print(f"\033[38;5;180mParsed confidence score: {confidence}\033[0m")
       except ValueError:
         confidence = 0.7
 
@@ -208,16 +216,15 @@ def create_shared_fields_pipeline():
 
   def advisor(state: SharedFieldsState) -> dict:
     """Reads analysis + confidence, writes recommendations."""
+
+    content = (
+      "You are a strategic advisor. Based on the analysis and confidence score, "
+      "provide 3 actionable recommendations. Return them as a JSON array of strings. "
+      "Return ONLY the JSON array, no markdown."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a strategic advisor. Based on the analysis and "
-            "confidence score, provide 3 actionable recommendations. "
-            "Return them as a JSON array of strings. "
-            "Return ONLY the JSON array, no markdown."
-          )
-        ),
+        SystemMessage(content=(content)),
         HumanMessage(
           content=(
             f"Query: {state['query']}\n"
@@ -249,15 +256,18 @@ def create_shared_fields_pipeline():
   return graph.compile()
 
 
+# Demo shared state fields between agents
 def demo_shared_state():
   """Demo shared state fields between agents."""
   agent = create_shared_fields_pipeline()
+  save_graph_png(agent, "graphK2_shared_state.png")
 
-  print("Shared State Demo:\n")
+  query = "Should a small business invest in AI automation in 2026? In Chinese."
+  print(f"\n\033[32mUser query: {query}\033[0m")
 
   result = agent.invoke(
     {
-      "query": "Should a small business invest in AI automation in 2026?",
+      "query": query,
       "raw_data": [],
       "analysis": "",
       "recommendations": [],
@@ -265,16 +275,16 @@ def demo_shared_state():
     }
   )
 
-  print(f"Data collected: {len(result['raw_data'])} points")
-  for d in result["raw_data"]:
-    print(f"  - [{d.get('source', 'N/A')}] {d.get('finding', 'N/A')[:80]}...")
+  print(f"\n\033[93mData collected: {len(result['raw_data'])} points\033[0m")
+  for i, d in enumerate(result["raw_data"], 1):
+    print(f"{i}. [{d.get('source', 'N/A')}] {d.get('finding', 'N/A')}")
 
-  print(f"\nAnalysis: {result['analysis'][:200]}...")
+  print(f"\nAnalysis: {result['analysis']}")
   print(f"Confidence: {result['confidence_score']}")
 
-  print("\nRecommendations:")
+  print("\n\033[93mRecommendations:\033[0m")
   for i, rec in enumerate(result["recommendations"], 1):
-    print(f"  {i}. {rec}")
+    print(f"{i}. {rec}")
 
 
 # ============================================================
@@ -316,15 +326,14 @@ def create_blackboard_system():
 
     context = "\n".join(context_parts)
 
+    content = (
+      "You are a skilled writer. Write or revise a short paragraph "
+      "(3-4 sentences) based on the topic and any feedback provided. "
+      "If there's feedback, directly address it in your revision."
+    )
     response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a skilled writer. Write or revise a short paragraph "
-            "(3-4 sentences) based on the topic and any feedback provided. "
-            "If there's feedback, directly address it in your revision."
-          )
-        ),
+        SystemMessage(content=(content)),
         HumanMessage(content=context),
       ]
     )
@@ -344,15 +353,14 @@ def create_blackboard_system():
     """Reads latest draft from blackboard, writes critique or approves."""
     latest_draft = state["drafts"][-1] if state["drafts"] else "No draft yet"
 
+    content = (
+      "You are a strict editor. Review the draft for clarity, accuracy, "
+      "and engagement. Approve ONLY if it's genuinely good. "
+      "If iteration is 3 or more, be more lenient."
+    )
     decision = critic_llm.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a strict editor. Review the draft for clarity, accuracy, "
-            "and engagement. Approve ONLY if it's genuinely good. "
-            "If iteration is 3 or more, be more lenient."
-          )
-        ),
+        SystemMessage(content=(content)),
         HumanMessage(
           content=(
             f"Topic: {state['topic']}\nIteration: {state['iteration']}\nDraft: {latest_draft}"
@@ -364,11 +372,12 @@ def create_blackboard_system():
     # Force approval after 3 iterations to prevent infinite loops
     approved = decision.approved or state["iteration"] >= 3
 
+    content = f"[CRITIC]: {'APPROVED' if approved else 'REVISION NEEDED'} - {decision.feedback}"
     result = {
       "is_approved": approved,
       "messages": [
         AIMessage(
-          content=f"[CRITIC]: {'APPROVED' if approved else 'REVISION NEEDED'} - {decision.feedback}",
+          content=content,
           name="critic",
         )
       ],
@@ -400,13 +409,15 @@ def create_blackboard_system():
 def demo_blackboard():
   """Demo blackboard iterative refinement."""
   agent = create_blackboard_system()
+  save_graph_png(agent, "graphK3_blackboard.png")
 
-  print("Blackboard Pattern Demo:\n")
-
+  # print("Blackboard Pattern Demo:\n")
+  query = "Why is LangGraph great for building multi-agent systems? Give some real world examples. In Chinese."
+  print(f"\n\033[32mUser query: {query}\033[0m")
   result = agent.invoke(
     {
       "messages": [],
-      "topic": "Why LangGraph is great for building multi-agent systems",
+      "topic": query,
       "drafts": [],
       "critiques": [],
       "iteration": 0,
@@ -414,23 +425,23 @@ def demo_blackboard():
     }
   )
 
-  print(f"Total iterations: {result['iteration']}")
+  print(f"\n\033[93mTotal Iterations: {result['iteration']}\033[0m")
   print(f"Approved: {result['is_approved']}")
 
-  print("\nConversation:")
+  print("\n\033[93mConversation:\033[0m")
   for msg in result["messages"]:
     if isinstance(msg, AIMessage):
-      print(f"\n{msg.content}")
+      print(f"{msg.content}\n")
 
-  print(f"\nFinal draft:\n{result['drafts'][-1]}")
+  print(f"\033[93mFinal Draft:\033[0m\n{result['drafts'][-1]}")
 
 
 if __name__ == "__main__":
-  print_section("Demo Shared State")
+  # print_section("Demo Message Passing - add_messages")
+  # demo_message_passing()
+
+  print_section("Demo Shared State - operator.add")
   demo_shared_state()
 
-  print_section("Demo Message Passing")
-  demo_message_passing()
-
-  print_section("Demo Blackboard")
-  demo_blackboard()
+  # print_section("Demo Blackboard - add_messages + embedded operator.add")
+  # demo_blackboard()
