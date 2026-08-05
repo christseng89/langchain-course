@@ -20,6 +20,11 @@ load_dotenv()
 LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
 
+CONFIDENCE_THRESHOLD = 0.96
+MAX_ITERATIONS = 4
+NUM_RECOMMENDATIONS = 5
+NUM_DATA_POINTS_PER_ITERATION = 4
+
 
 def print_section(name: str) -> None:
   blue = "\033[94m"
@@ -147,6 +152,8 @@ def demo_message_passing():
 # Agents communicate through structured state fields
 # operator.add is used to combine lists from multiple agents
 # ============================================================
+
+
 class SharedFieldsState(TypedDict):
   query: str
   # Each agent writes to its own field — others can read it
@@ -154,6 +161,8 @@ class SharedFieldsState(TypedDict):
   analysis: str
   recommendations: list[str]
   confidence_score: float
+  iteration: int
+  gaps: str
 
 
 def create_shared_fields_pipeline():
@@ -163,14 +172,26 @@ def create_shared_fields_pipeline():
     """Collects data and writes to the raw_data field."""
 
     content = (
-      "You are a data collector. Given the query, produce 3 data points "
+      f"You are a data collector. Given the query, produce {NUM_DATA_POINTS_PER_ITERATION} NEW data points "
       "as a JSON array of objects with 'source' and 'finding' keys. "
+      "Do not repeat any finding already collected. If gaps are pointed out "
+      "by the analyst, prioritize filling those specific gaps; otherwise dig "
+      "into a different angle, source, or level of detail. "
       "Return ONLY the JSON array, no markdown."
     )
+
+    existing_findings = [d.get("finding", "") for d in state.get("raw_data", [])]
+    human_content = state["query"]
+    if existing_findings:
+      already_collected = "\n".join(f"- {f}" for f in existing_findings)
+      human_content += f"\n\nAlready collected (do not repeat these):\n{already_collected}"
+    if state.get("gaps"):
+      human_content += f"\n\nGaps identified by the analyst — focus here:\n{state['gaps']}"
+
     response = LLM.invoke(
       [
         SystemMessage(content=(content)),
-        HumanMessage(content=state["query"]),
+        HumanMessage(content=human_content),
       ]
     )
 
@@ -180,7 +201,9 @@ def create_shared_fields_pipeline():
       # If the LLM response is not valid JSON, wrap it in a single data point
       data = [{"source": "llm", "finding": response.content}]
 
-    return {"raw_data": data}
+    iteration = state.get("iteration", 0) + 1
+    print(f"\033[38;5;180m[data_collector] iteration {iteration}\033[0m")
+    return {"raw_data": data, "iteration": iteration}
 
   def analyst(state: SharedFieldsState) -> dict:
     """Reads raw_data field, writes analysis and confidence."""
@@ -188,9 +211,15 @@ def create_shared_fields_pipeline():
 
     content = (
       "You are a data analyst. Analyze the collected data and provide: "
-      "1) A brief analysis (2-3 sentences), and "
-      "2) A confidence score from 0.0 to 1.0. "
-      "Format: ANALYSIS: <text>\nCONFIDENCE: <number>"
+      "1) A brief analysis (2-3 sentences), "
+      "2) A confidence score from 0.0 to 1.0, reflecting how well the "
+      "evidence supports a solid answer. More independent, non-redundant "
+      "data points covering different angles should raise your confidence; "
+      "thin or repetitive evidence should keep it low, and "
+      f"3) If confidence is below {CONFIDENCE_THRESHOLD}, specific gaps the data collector "
+      "should fill next (missing angles, unanswered sub-questions, weak "
+      f"sourcing). If confidence is already {CONFIDENCE_THRESHOLD}+, leave this empty. "
+      "Format: ANALYSIS: <text>\nCONFIDENCE: <number>\nGAPS: <text or empty>"
     )
     response = LLM.invoke(
       [
@@ -202,24 +231,27 @@ def create_shared_fields_pipeline():
     content = response.content
     analysis = content
     confidence = 0.7  # default
+    gaps = ""
 
     if "CONFIDENCE:" in content:
-      parts = content.split("CONFIDENCE:")
-      analysis = parts[0].replace("ANALYSIS:", "").strip()
+      analysis_part, _, rest = content.partition("CONFIDENCE:")
+      analysis = analysis_part.replace("ANALYSIS:", "").strip()
+      confidence_part, _, gaps_part = rest.partition("GAPS:")
       try:
-        confidence = float(parts[1].strip())
+        confidence = float(confidence_part.strip())
         print(f"\033[38;5;180mParsed confidence score: {confidence}\033[0m")
       except ValueError:
         confidence = 0.7
+      gaps = gaps_part.strip()
 
-    return {"analysis": analysis, "confidence_score": confidence}
+    return {"analysis": analysis, "confidence_score": confidence, "gaps": gaps}
 
   def advisor(state: SharedFieldsState) -> dict:
     """Reads analysis + confidence, writes recommendations."""
 
     content = (
       "You are a strategic advisor. Based on the analysis and confidence score, "
-      "provide 3 actionable recommendations. Return them as a JSON array of strings. "
+      f"provide {NUM_RECOMMENDATIONS} actionable recommendations. Return them as a JSON array of strings. "
       "Return ONLY the JSON array, no markdown."
     )
     response = LLM.invoke(
@@ -242,15 +274,29 @@ def create_shared_fields_pipeline():
 
     return {"recommendations": recs}
 
+  def should_retry_node(_state: SharedFieldsState) -> dict:
+    """Pass-through node so the retry/advance decision shows up in the graph diagram."""
+    return {}
+
+  def should_retry(state: SharedFieldsState) -> Literal["data_collector", "advisor"]:
+    """Loop back for more data until confidence is high enough or we've tried enough times."""
+    if state["confidence_score"] < CONFIDENCE_THRESHOLD and state["iteration"] < MAX_ITERATIONS:
+      return "data_collector"
+    return "advisor"
+
   graph = StateGraph(SharedFieldsState)
 
   graph.add_node("data_collector", data_collector)
   graph.add_node("analyst", analyst)
+  graph.add_node("should_retry", should_retry_node)
   graph.add_node("advisor", advisor)
 
   graph.add_edge(START, "data_collector")
   graph.add_edge("data_collector", "analyst")
-  graph.add_edge("analyst", "advisor")
+  graph.add_edge("analyst", "should_retry")
+  graph.add_conditional_edges(
+    "should_retry", should_retry, {"data_collector": "data_collector", "advisor": "advisor"}
+  )
   graph.add_edge("advisor", END)
 
   return graph.compile()
@@ -262,29 +308,40 @@ def demo_shared_state():
   agent = create_shared_fields_pipeline()
   save_graph_png(agent, "graphK2_shared_state.png")
 
-  query = "Should a small business invest in AI automation in 2026? In Chinese."
-  print(f"\n\033[32mUser query: {query}\033[0m")
+  queires = [
+    # "Should a small business invest in AI automation in 2026? In Chinese.",
+    # "一個開發銀行軟件公司,軟件開發過程中使用與未使用AI的主要差別是什麼? 請提供一些實際的例子。 In Chinese.",
+    # "What is the benefit to use IDP (internal developer platform) for a software development company? In Chinese.",
+    # "銀行使用AI提升工作效率的作業有哪些 in 2026? 請提供一些實際的案例。 In Chinese.",
+    "銀行使用AI提升Trade Finance工作效率的作業有哪些 in 2026? 請提供一些實際的案例。 In Chinese.",
+  ]
 
-  result = agent.invoke(
-    {
-      "query": query,
-      "raw_data": [],
-      "analysis": "",
-      "recommendations": [],
-      "confidence_score": 0.0,
-    }
-  )
+  for query in queires:
+    print(f"\n\033[32mUser query: {query}\033[0m")
 
-  print(f"\n\033[93mData collected: {len(result['raw_data'])} points\033[0m")
-  for i, d in enumerate(result["raw_data"], 1):
-    print(f"{i}. [{d.get('source', 'N/A')}] {d.get('finding', 'N/A')}")
+    result = agent.invoke(
+      {
+        "query": query,
+        "raw_data": [],
+        "analysis": "",
+        "recommendations": [],
+        "confidence_score": 0.0,
+        "iteration": 0,
+        "gaps": "",
+      }
+    )
 
-  print(f"\nAnalysis: {result['analysis']}")
-  print(f"Confidence: {result['confidence_score']}")
+    print(f"\n\033[93mData collected: {len(result['raw_data'])} points\033[0m")
+    for i, d in enumerate(result["raw_data"], 1):
+      print(f"{i}. [{d.get('source', 'N/A')}] {d.get('finding', 'N/A')}")
 
-  print("\n\033[93mRecommendations:\033[0m")
-  for i, rec in enumerate(result["recommendations"], 1):
-    print(f"{i}. {rec}")
+    print(f"\nAnalysis: {result['analysis']}")
+    print(f"Confidence: {result['confidence_score']}")
+    print(f"Iterations: {result['iteration']}")
+
+    print("\n\033[93mRecommendations:\033[0m")
+    for i, rec in enumerate(result["recommendations"], 1):
+      print(f"{i}. {rec}")
 
 
 # ============================================================
@@ -338,6 +395,7 @@ def create_blackboard_system():
       ]
     )
 
+    print(f"\033[38;5;180m[drafter] iteration {state['iteration'] + 1}\033[0m")
     return {
       "drafts": [response.content],
       "messages": [
@@ -354,9 +412,18 @@ def create_blackboard_system():
     latest_draft = state["drafts"][-1] if state["drafts"] else "No draft yet"
 
     content = (
-      "You are a strict editor. Review the draft for clarity, accuracy, "
-      "and engagement. Approve ONLY if it's genuinely good. "
-      "If iteration is 3 or more, be more lenient."
+      "You are a strict, hard-to-please editor. Reject generic, vague, or "
+      "buzzword-heavy writing — phrases like 'improves efficiency' or "
+      "'accelerates development' with no concrete example, number, or "
+      "real-world specific do NOT count as good enough. "
+      "Approve ONLY if the draft includes at least one concrete, specific "
+      "example, detail, or piece of evidence per claim it makes. "
+      "By default, assume the first draft has room to improve and require "
+      "at least one round of revision — only approve on iteration 1 if the "
+      "draft is truly exceptional with zero notable weaknesses. "
+      "When you reject, the feedback MUST name the specific claim that "
+      "needs a concrete example or detail added. "
+      f"If iteration is {MAX_ITERATIONS} or more, be more lenient."
     )
     decision = critic_llm.invoke(
       [
@@ -369,8 +436,9 @@ def create_blackboard_system():
       ]
     )
 
-    # Force approval after 3 iterations to prevent infinite loops
-    approved = decision.approved or state["iteration"] >= 3
+    # Force approval after MAX_ITERATIONS to prevent infinite loops
+    print(f"\033[38;5;180m[critic] Approved: {decision.approved}\033[0m")
+    approved = decision.approved or state["iteration"] >= MAX_ITERATIONS
 
     content = f"[CRITIC]: {'APPROVED' if approved else 'REVISION NEEDED'} - {decision.feedback}"
     result = {
@@ -388,6 +456,10 @@ def create_blackboard_system():
 
     return result
 
+  def route_after_critic_node(_state: BlackboardState) -> dict:
+    """Pass-through node so the retry/approve decision shows up in the graph diagram."""
+    return {}
+
   def route_after_critic(state: BlackboardState) -> Literal["drafter", "end"]:
     """Loop back to drafter if not approved."""
     if state["is_approved"]:
@@ -398,10 +470,14 @@ def create_blackboard_system():
 
   graph.add_node("drafter", drafter)
   graph.add_node("critic", critic)
+  graph.add_node("route_after_critic", route_after_critic_node)
 
   graph.add_edge(START, "drafter")
   graph.add_edge("drafter", "critic")
-  graph.add_conditional_edges("critic", route_after_critic, {"drafter": "drafter", "end": END})
+  graph.add_edge("critic", "route_after_critic")
+  graph.add_conditional_edges(
+    "route_after_critic", route_after_critic, {"drafter": "drafter", "end": END}
+  )
 
   return graph.compile()
 
@@ -411,37 +487,42 @@ def demo_blackboard():
   agent = create_blackboard_system()
   save_graph_png(agent, "graphK3_blackboard.png")
 
-  # print("Blackboard Pattern Demo:\n")
-  query = "Why is LangGraph great for building multi-agent systems? Give some real world examples. In Chinese."
-  print(f"\n\033[32mUser query: {query}\033[0m")
-  result = agent.invoke(
-    {
-      "messages": [],
-      "topic": query,
-      "drafts": [],
-      "critiques": [],
-      "iteration": 0,
-      "is_approved": False,
-    }
-  )
+  queries = [
+    "Why is LangGraph great for building multi-agent systems? Give some real world examples. In Chinese.",
+    "What are the main benefits to use AI for software development life cycle? In Chinese.",
+  ]
 
-  print(f"\n\033[93mTotal Iterations: {result['iteration']}\033[0m")
-  print(f"Approved: {result['is_approved']}")
+  for query in queries:
+    # query = "Why is LangGraph great for building multi-agent systems? Give some real world examples. In Chinese."
+    print(f"\n\033[32mUser query: {query}\033[0m")
+    result = agent.invoke(
+      {
+        "messages": [],
+        "topic": query,
+        "drafts": [],
+        "critiques": [],
+        "iteration": 0,
+        "is_approved": False,
+      }
+    )
 
-  print("\n\033[93mConversation:\033[0m")
-  for msg in result["messages"]:
-    if isinstance(msg, AIMessage):
-      print(f"{msg.content}\n")
+    print(f"\n\033[93mTotal Iterations: {result['iteration']}\033[0m")
+    print(f"Approved: {result['is_approved']}")
 
-  print(f"\033[93mFinal Draft:\033[0m\n{result['drafts'][-1]}")
+    print("\n\033[93mConversation:\033[0m")
+    for msg in result["messages"]:
+      if isinstance(msg, AIMessage):
+        print(f"{msg.content}\n")
+
+    print(f"\033[93mFinal Draft:\033[0m\n{result['drafts'][-1]}")
 
 
 if __name__ == "__main__":
   # print_section("Demo Message Passing - add_messages")
   # demo_message_passing()
 
-  print_section("Demo Shared State - operator.add")
-  demo_shared_state()
+  # print_section("Demo Shared State - operator.add")
+  # demo_shared_state()
 
-  # print_section("Demo Blackboard - add_messages + embedded operator.add")
-  # demo_blackboard()
+  print_section("Demo Blackboard - add_messages + embedded operator.add")
+  demo_blackboard()
