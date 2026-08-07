@@ -518,11 +518,11 @@ def demo_blackboard():
 
 
 if __name__ == "__main__":
-  # print_section("Demo Message Passing - add_messages")
-  # demo_message_passing()
+  print_section("Demo Message Passing - add_messages")
+  demo_message_passing()
 
-  # print_section("Demo Shared State - operator.add")
-  # demo_shared_state()
+  print_section("Demo Shared State - operator.add")
+  demo_shared_state()
 
   print_section("Demo Blackboard - add_messages + embedded operator.add")
   demo_blackboard()
