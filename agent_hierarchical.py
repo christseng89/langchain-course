@@ -15,11 +15,25 @@ from typing_extensions import Annotated, TypedDict
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
 
 
 # ============================================================
-# Shared state schema used across all levels
+# Team State Schema -> Shared state schema used across all 3 department subgraphs
 # ============================================================
 
 
@@ -33,7 +47,7 @@ class TeamState(TypedDict):
 # ============================================================
 
 
-def build_research_team() -> StateGraph:
+def build_research_team() -> StateGraph:  # StateGraph for the research department
   """Build the research department subgraph."""
 
   def web_researcher(state: TeamState) -> dict:
@@ -45,14 +59,13 @@ def build_research_team() -> StateGraph:
         query = msg.content
         break
 
-    response = llm.invoke(
+    content = (
+      "You are a web researcher. Find key facts and data about "
+      "the topic. Provide 3-4 bullet points of findings. Be specific."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a web researcher. Find key facts and data about "
-            "the topic. Provide 3-4 bullet points of findings. Be specific."
-          )
-        ),
+        SystemMessage(content=content),
         HumanMessage(content=query),
       ]
     )
@@ -74,14 +87,13 @@ def build_research_team() -> StateGraph:
         query = msg.content
         break
 
-    response = llm.invoke(
+    content = (
+      "You are an academic reviewer. Provide technical depth and "
+      "cite relevant concepts or frameworks. 3-4 bullet points."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are an academic reviewer. Provide technical depth and "
-            "cite relevant concepts or frameworks. 3-4 bullet points."
-          )
-        ),
+        SystemMessage(content=content),
         HumanMessage(content=query),
       ]
     )
@@ -97,15 +109,15 @@ def build_research_team() -> StateGraph:
 
   def research_lead(state: TeamState) -> dict:
     """Synthesizes findings from both researchers."""
-    response = llm.invoke(
+
+    content = (
+      "You are the research lead. Synthesize the web researcher's "
+      "and paper reviewer's findings into a cohesive research summary. "
+      "Keep it to one to three short paragraphs."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are the research lead. Synthesize the web researcher's "
-            "and paper reviewer's findings into a cohesive research brief. "
-            "Keep it to one short paragraph."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -135,25 +147,27 @@ def build_research_team() -> StateGraph:
   return research_graph
 
 
+# DEMO: Run a single department in isolation
 def demo_single_department():
   """Demo a single department subgraph in isolation."""
 
-  print("Single Department Demo (Research Team):\n")
-
   research_team = build_research_team().compile()
+  save_graph_png(research_team, "graphL1_single_department.png")
 
+  query = "What is retrieval-augmented generation (RAG)? Explain in simple terms. In Chinese"
+  print(f"\n\033[92mQuery: {query}\033[0m\n")
   result = research_team.invoke(
     {
-      "messages": [HumanMessage(content="What is retrieval-augmented generation (RAG)?")],
+      "messages": [HumanMessage(content=query)],
       "final_answer": "",
     }
   )
 
   for msg in result["messages"]:
     if isinstance(msg, AIMessage):
-      print(f"{msg.content[:200]}...\n")
+      print(f"{msg.content}\n")
 
-  print(f"Research Brief:\n{result['final_answer']}")
+  print(f"\033[93mFinal Summary:\033[0m\n{result['final_answer']}")
 
 
 # ============================================================
@@ -161,20 +175,20 @@ def demo_single_department():
 # ============================================================
 
 
-def build_content_team() -> StateGraph:
+def build_content_team() -> StateGraph:  # StateGraph for the content department
   """Build the content department subgraph."""
 
   def content_writer(state: TeamState) -> dict:
     """Writes content based on available context."""
-    response = llm.invoke(
+
+    content = (
+      "You are a skilled content writer. Using any research or context "
+      "in the conversation, write a clear, engaging short piece "
+      "(one paragraph). Match a professional but accessible tone."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a skilled content writer. Using any research or context "
-            "in the conversation, write a clear, engaging short piece "
-            "(one paragraph). Match a professional but accessible tone."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -183,15 +197,15 @@ def build_content_team() -> StateGraph:
 
   def content_editor(state: TeamState) -> dict:
     """Edits and polishes the writer's output."""
-    response = llm.invoke(
+
+    content = (
+      "You are a content editor. Take the writer's draft and "
+      "improve clarity, fix any issues, and tighten the language. "
+      "Return the polished version only."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a content editor. Take the writer's draft and "
-            "improve clarity, fix any issues, and tighten the language. "
-            "Return the polished version only."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -218,20 +232,20 @@ def build_content_team() -> StateGraph:
 # ============================================================
 
 
-def build_analysis_team() -> StateGraph:
+def build_analysis_team() -> StateGraph:  # StateGraph for the analysis department
   """Build the analysis department subgraph."""
 
   def data_analyst(state: TeamState) -> dict:
     """Provides data-driven analysis."""
-    response = llm.invoke(
+
+    content = (
+      "You are a data analyst. Analyze the topic with numbers, "
+      "trends, and quantitative reasoning. Provide 3-4 data-driven "
+      "insights. Make up plausible stats for demonstration."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a data analyst. Analyze the topic with numbers, "
-            "trends, and quantitative reasoning. Provide 3-4 data-driven "
-            "insights. Make up plausible stats for demonstration."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -242,15 +256,15 @@ def build_analysis_team() -> StateGraph:
 
   def strategy_advisor(state: TeamState) -> dict:
     """Provides strategic recommendations."""
-    response = llm.invoke(
+
+    content = (
+      "You are a strategy advisor. Based on the data analysis in the "
+      "conversation, provide 3 actionable strategic recommendations. "
+      "Be specific and practical."
+    )
+    response = LLM.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are a strategy advisor. Based on the data analysis in the "
-            "conversation, provide 3 actionable strategic recommendations. "
-            "Be specific and practical."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -290,8 +304,13 @@ def create_hierarchical_system():
 
   # Compile department subgraphs
   research_team = build_research_team().compile()
+  save_graph_png(research_team, "graphL2.1_hs_research_team.png")
+
   content_team = build_content_team().compile()
+  save_graph_png(content_team, "graphL2.2_hs_content_team.png")
+
   analysis_team = build_analysis_team().compile()
+  save_graph_png(analysis_team, "graphL2.3_hs_analysis_team.png")
 
   # Supervisor routing schema
   class DepartmentRoute(BaseModel):
@@ -300,21 +319,21 @@ def create_hierarchical_system():
     )
     reasoning: str = Field(description="Why this department was chosen")
 
-  router_llm = llm.with_structured_output(DepartmentRoute)
+  router_llm = LLM.with_structured_output(DepartmentRoute)
 
   def ceo_supervisor(state: TeamState) -> dict:
     """Top-level supervisor routes to the right department."""
+
+    content = (
+      "You are the CEO supervisor. Route the request to the right department:\n"
+      "- research: Fact-finding, investigation, technical deep-dives\n"
+      "- content: Writing, blog posts, marketing copy, summaries\n"
+      "- analysis: Data analysis, strategy, business decisions\n\n"
+      "Choose the BEST fit department."
+    )
     decision = router_llm.invoke(
       [
-        SystemMessage(
-          content=(
-            "You are the CEO supervisor. Route the request to the right department:\n"
-            "- research: Fact-finding, investigation, technical deep-dives\n"
-            "- content: Writing, blog posts, marketing copy, summaries\n"
-            "- analysis: Data analysis, strategy, business decisions\n\n"
-            "Choose the BEST fit department."
-          )
-        ),
+        SystemMessage(content=content),
         *state["messages"],
       ]
     )
@@ -345,6 +364,7 @@ def create_hierarchical_system():
     return "research_team"  # default
 
   # Build parent graph — departments are compiled subgraphs as nodes
+  # 就是把 CEO 節點和三個已編譯好的部門子圖,組成一個完整的 hierarchical 系統。
   parent = StateGraph(TeamState)
 
   parent.add_node("ceo", ceo_supervisor)
@@ -367,65 +387,67 @@ def create_hierarchical_system():
   parent.add_edge("content_team", END)
   parent.add_edge("analysis_team", END)
 
-  return parent.compile()
+  app = parent.compile()
+  save_graph_png(app, "graphL2.0_hs_ceo_route_to_department.png")
+  return app
 
 
+# DEMO: Show hierarchical routing with multiple queries
 def demo_hierarchical_routing():
   """Demo the full hierarchical system with routing."""
 
   system = create_hierarchical_system()
-
-  print("Hierarchical Routing Demo:\n")
-
   queries = [
-    "What are the latest trends in large language models?",
-    "Write a short blog introduction about AI agents",
-    "Should my startup invest in building AI features this year?",
+    "What are the latest trends in large language models? Response in Chinese",
+    "Write a short blog introduction about AI agents. Response in Chinese",
+    "Should my startup invest in building AI features this year? Response in Chinese",
   ]
 
   for query in queries:
-    print(f"Query: {query}")
-    print("-" * 40)
+    print(f"\n\033[92mQuery: {query}\033[0m\n")
 
     result = system.invoke({"messages": [HumanMessage(content=query)], "final_answer": ""})
 
     # Show the CEO routing decision
     for msg in result["messages"]:
       if isinstance(msg, AIMessage) and msg.name == "ceo":
-        print(f"  {msg.content}")
+        print(f"{msg.content}")
 
     # Show the final answer
-    print(f"  Final: {result['final_answer'][:200]}...")
-    print("=" * 50 + "\n")
+    print(f"\n\033[93mFinal Answer:\033[0m\n{result['final_answer']}\n")
 
 
+# DEMO: Show full trace through the hierarchy
 def demo_hierarchical_trace():
   """Show full trace through the hierarchy."""
 
   system = create_hierarchical_system()
+  # print("Full Hierarchical Trace:\n")
 
-  print("Full Hierarchical Trace:\n")
-
+  query = (
+    "Research the impact of AI agents on software development productivity. Response in Chinese"
+  )
+  print(f"\n\033[92mQuery: {query}\033[0m\n")
   result = system.invoke(
     {
-      "messages": [
-        HumanMessage(
-          content="Research the impact of AI agents on software development productivity"
-        )
-      ],
+      "messages": [HumanMessage(content=query)],
       "final_answer": "",
     }
   )
 
   for i, msg in enumerate(result["messages"]):
     if isinstance(msg, AIMessage):
-      label = msg.name or "unknown"
-      print(f"[Step {i}] {label}:")
-      print(f"  {msg.content[:150]}...")
-      print()
+      # label = msg.name or "unknown"
+      label = msg.name if msg.name else "unknown"
+      print(f"\033[93m[Step {i}] {label}:\033[0m\n{msg.content}\n")
 
 
 if __name__ == "__main__":
-  # demo_single_department()
+  print_section("Demo Single Research Department")
+  demo_single_department()
+
+  print_section("Demo Hierarchical Routing")
   demo_hierarchical_routing()
+
+  print_section("Demo Hierarchical Trace")
   demo_hierarchical_trace()
