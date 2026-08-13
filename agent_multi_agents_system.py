@@ -11,6 +11,7 @@ Patterns used:
 
 import json
 import operator
+import re
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -24,8 +25,24 @@ from typing_extensions import Annotated, TypedDict
 
 load_dotenv()
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-creative_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+MAX_ITERATIONS = 3  # Max revisions before auto-approval
+MIN_QUALITY_SCORE = 0.9  # Minimum score to approve report
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
+def save_graph_png(app, png_file: str) -> None:
+  png_bytes = app.get_graph().draw_mermaid_png()
+  with open(png_file, "wb") as f:
+    f.write(png_bytes)
+  print(f"\033[93mGraph saved to {png_file}\033[0m")
 
 
 # ============================================================
@@ -59,7 +76,7 @@ class SearchTaskState(TypedDict):
 def supervisor(state: ResearchState) -> dict:
   """Plans research by generating targeted search queries."""
 
-  response = llm.invoke(
+  response = LLM.invoke(
     [
       SystemMessage(
         content=(
@@ -106,15 +123,15 @@ def search_agent(state: SearchTaskState) -> dict:
   """
   query = state["search_query"]
 
-  response = llm.invoke(
+  content = (
+    "You are a web research agent. For the given search query, "
+    "provide 2-3 key findings. Each finding should have a 'title' "
+    "and 'detail' field. Return a JSON array. No markdown."
+  )
+
+  response = LLM.invoke(
     [
-      SystemMessage(
-        content=(
-          "You are a web research agent. For the given search query, "
-          "provide 2-3 key findings. Each finding should have a 'title' "
-          "and 'detail' field. Return a JSON array. No markdown."
-        )
-      ),
+      SystemMessage(content=content),
       HumanMessage(content=f"Search query: {query}"),
     ]
   )
@@ -153,7 +170,7 @@ def analyst(state: ResearchState) -> dict:
   """Reads all findings from the blackboard and synthesizes."""
   findings_text = json.dumps(state["findings"], indent=2)
 
-  response = llm.invoke(
+  response = LLM.invoke(
     [
       SystemMessage(
         content=(
@@ -193,6 +210,7 @@ def report_writer(state: ResearchState) -> dict:
       f"Address this feedback: {state['quality_feedback']}"
     )
 
+  creative_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
   response = creative_llm.invoke(
     [
       SystemMessage(
@@ -242,8 +260,7 @@ class QualityReview(BaseModel):
 def quality_checker(state: ResearchState) -> dict:
   """Reviews the report and either approves or sends back for revision."""
 
-  review_llm = llm.with_structured_output(QualityReview)
-
+  review_llm = LLM.with_structured_output(QualityReview)
   review = review_llm.invoke(
     [
       SystemMessage(
@@ -252,8 +269,8 @@ def quality_checker(state: ResearchState) -> dict:
           "- Completeness: Does it cover the topic well?\n"
           "- Clarity: Is it well-written and easy to understand?\n"
           "- Actionability: Are recommendations specific?\n\n"
-          "Score from 0.0 to 1.0. Approve if score >= 0.7.\n"
-          "If this is iteration 2 or higher, be more lenient."
+          f"Score from 0.0 to 1.0. Approve if score >= {MIN_QUALITY_SCORE}.\n"
+          f"If this is iteration {MAX_ITERATIONS} or higher, be more lenient."
         )
       ),
       HumanMessage(
@@ -265,7 +282,7 @@ def quality_checker(state: ResearchState) -> dict:
   )
 
   # Force approve after 2 iterations to prevent infinite loops
-  approved = review.approved or state["iteration"] >= 2
+  approved = review.approved or state["iteration"] >= MAX_ITERATIONS
 
   return {
     "quality_score": review.score,
@@ -311,7 +328,6 @@ def create_research_system():
 
   # Edges
   graph.add_edge(START, "supervisor")
-
   # Supervisor → parallel search agents (dynamic fan-out)
   graph.add_conditional_edges("supervisor", dispatch_searches, ["search_agent"])
 
@@ -332,19 +348,47 @@ def create_research_system():
   return graph.compile()
 
 
-# Demos
-def demo_research_with_streaming():
+# ============================================================
+# Routing: Quality gate
+# ============================================================
+
+
+def quality_gate(state: ResearchState) -> Literal["report_writer", "end"]:
+  """Route back to writer if quality is insufficient."""
+  if state["quality_score"] >= MIN_QUALITY_SCORE or state["iteration"] >= MAX_ITERATIONS:
+    return "end"
+  return "report_writer"
+
+
+# DEMO Individual search agent for testing without LangGraph
+def demo_individual_search():
+  """Demo just the search agent for testing."""
+
+  # Test the search agent directly
+  queries = [
+    "LangGraph multi-agent patterns",
+    "Best practices for multi-agent AI systems in 2026. In Chinese",
+    "Give me a list of LangGraph multi-agent patterns with brief descriptions in Chinese",
+  ]
+
+  for i, query in enumerate(queries):
+    print(f"\033[92mQuery {i + 1}: {query}\033[0m\n")
+    result = search_agent({"search_query": query, "findings": []})
+    print("\033[93mSearch Agent Findings:\033[0m")
+
+    for i, f in enumerate(result["findings"]):
+      print(f"{i + 1}. {f.get('title', 'N/A')}: {f.get('detail', 'N/A')}\n")
+
+
+# Demo Research System with Streaming Output
+def demo_research_with_stream():
   """Run the research system with step-by-step streaming output."""
 
   system = create_research_system()
-  graph = system.get_graph()
-  png_data = graph.draw_mermaid_png()
+  save_graph_png(system, "graphM1_research.png")
 
-  with open("research_graph.png", "wb") as f:
-    f.write(png_data)
-
-  topic = "Best practices for building multi-agent AI systems"
-  print(f"Streaming Research: {topic}\n")
+  topic = "Best practices for building multi-agent AI systems. Response in Chinese."
+  print(f"\n\033[92mStreaming Research: {topic}\033[0m\n")
 
   initial_state = {
     "messages": [],
@@ -358,60 +402,40 @@ def demo_research_with_streaming():
     "iteration": 0,
   }
 
-  # Stream updates to see each step as it happens
+  # Stream updates to see each step as it happens (system.stream returns a generator)
   for step in system.stream(initial_state, stream_mode="updates"):
     for node_name, update in step.items():
-      print(f"[{node_name}] completed")
+      # print(f"\033[33m[{node_name}] completed\033[0m")
 
       # Show interesting state changes
       if "search_queries" in update and update["search_queries"]:
-        print(f"  Planned queries: {update['search_queries']}")
+        results = update["search_queries"]
       if "findings" in update and update["findings"]:
-        print(f"  Found {len(update['findings'])} results")
-      if "quality_score" in update:
-        print(f"  Quality score: {update['quality_score']:.1f}")
+        results = update["findings"]
       if "report" in update and update["report"]:
-        print(f"  Report length: {len(update['report'])} chars")
+        results = re.sub(r"\n\s*\n+", "\n", update["report"]).splitlines()
 
-    print()
+      if node_name == "quality_checker":
+        print(f"\033[33m\nQuality score: {update['quality_score']:.2f}\033[0m")
+      else:
+        print(f"\033[33m[{node_name}] completed with {len(results)} Results\033[0m")
+        for result in results:
+          print(f"{result}\n")
 
-
-# ============================================================
-# Routing: Quality gate
-# ============================================================
-
-
-def quality_gate(state: ResearchState) -> Literal["report_writer", "end"]:
-  """Route back to writer if quality is insufficient."""
-  if state["quality_score"] >= 0.7 or state["iteration"] >= 2:
-    return "end"
-  return "report_writer"
+      print("")
 
 
-def demo_individual_search():
-  """Demo just the search agent for testing."""
-
-  print("Individual Search Agent Test:\n")
-
-  # Test the search agent directly
-  result = search_agent({"search_query": "LangGraph multi-agent patterns", "findings": []})
-
-  print("Findings from search:")
-  for f in result["findings"]:
-    print(f"  - {f.get('title', 'N/A')}: {f.get('detail', 'N/A')[:80]}...")
-
-
-def demo_full_research():
+# DEMO Full research system
+def demo_research_with_invoke():
   """Run the complete research pipeline."""
 
   system = create_research_system()
+  save_graph_png(system, "graphM2_multi_agents.png")
 
-  print("Multi-Agent Research System Demo")
-  print("=" * 60)
+  topic = "The impact of AI agents on software development in 2026. Response in Chinese."
+  print(f"\n\033[92mTopic: {topic}\033[0m\n")
 
-  topic = "The impact of AI agents on software development in 2026"
-  print(f"Topic: {topic}\n")
-
+  # System invocation with initial state
   result = system.invoke(
     {
       "messages": [],
@@ -427,32 +451,32 @@ def demo_full_research():
   )
 
   # Print the conversation trace
-  print("Agent Activity Log:")
-  print("-" * 40)
+  print("\033[93mAgent Activity Log:\033[0m")
   for msg in result["messages"]:
     if isinstance(msg, AIMessage):
-      print(f"  {msg.content[:120]}...")
+      print(f"{msg.content}\n")
   print()
 
   # Print final stats
   print(f"Total findings collected: {len(result['findings'])}")
-  print(f"Quality score: {result['quality_score']:.1f}")
+  print(f"Quality score: {result['quality_score']:.2f}")
   print(f"Iterations: {result['iteration']}")
   print()
 
   # Print the final report
-  print("=" * 60)
-  print("FINAL RESEARCH REPORT")
-  print("=" * 60)
+  print("\033[93mFINAL Research Report:\033[0m")
   print(result["report"])
 
 
 if __name__ == "__main__":
   # Run the individual search agent demo
-  # demo_individual_search()
-  # print("\n" + "=" * 50 + "\n")
+  print_section("Individual Search Agent Demo")
+  demo_individual_search()
+
   # Run the full research system demo with streaming output
-  # demo_research_with_streaming()
-  # print("\n" + "=" * 50 + "\n")
-  # Run the full research system demo without streaming output
-  demo_full_research()
+  print_section("Multi-Agents Research Demo by Stream")
+  demo_research_with_stream()
+
+  # # Run the full research system demo without streaming output
+  print_section("Multi-Agents Research Demo by Invoke")
+  demo_research_with_invoke()
