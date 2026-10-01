@@ -178,7 +178,7 @@ def create_supervisor_system():
   graph.add_edge("finalize", END)
 
   app = graph.compile()
-  save_graph_png(app, "GraphI_supervisor_graph.png")
+  save_graph_png(app, "graphI_supervisor.png")
 
   return app
 
