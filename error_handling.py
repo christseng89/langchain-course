@@ -22,10 +22,14 @@ load_dotenv()
 LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
 
-RECOVERY_TIMEOUT = 3.0  # seconds
-FAILURE_THRESHOLD = 3  # number of failed calls to open the circuit
-RANDOM_FAILURE_RATE = 0.3  # 30% chance of failure for demonstration
-MAX_BLOCKED_RETRIES = 3  # retries for a query blocked by an open circuit
+MAX_RETRIES = 3  # total attempts (including the first call)
+MAX_DELAY = 30.0  # max delay for retry backoff
+BASE_DELAY = 1.0  # base delay for retry backoff
+RANDOM_FAILURE_RATE = 0.5  # 50% chance of failure for demonstration
+FAILURE_THRESHOLD = 3  # consecutive failures before circuit breaker opens
+RECOVERY_TIMEOUT = 2.0  # seconds before an open circuit allows a half-open trial
+
+FALLBACK_TIMEOUT = 10.0  # seconds for fallback chain model calls
 
 
 def print_section(name: str) -> None:
@@ -42,10 +46,15 @@ def save_graph_png(app, png_file: str) -> None:
 
 
 # === Retry Decorator ===
+# 參數	        預設值	   意義
+# max_retries	  3	最多    嘗試幾次(含第一次)
+# base_delay	  1.0 秒	  第一次失敗後基礎等待時間
+# max_delay	    30.0 秒	  等待時間的上限,避免越等越久
+# delay = min(base_delay * (2**attempt), max_delay)
 def with_retry(
-  max_retries: int = 3,
-  base_delay: float = 1.0,
-  max_delay: float = 30.0,
+  max_retries: int = MAX_RETRIES,
+  base_delay: float = BASE_DELAY,
+  max_delay: float = MAX_DELAY,
   exceptions: tuple = (Exception,),
 ):
   """Retry decorator with exponential backoff."""
@@ -66,6 +75,8 @@ def with_retry(
             delay = delay * (0.5 + random.random())
             print(f"\033[33mAttempt {attempt + 1} failed:\033[0m {e}. Retrying in {delay:.1f}s")
             time.sleep(delay)
+          else:
+            print(f"\033[31mAttempt {attempt + 1} failed:\033[0m {e}. No more retries")
 
       raise last_exception
 
@@ -74,10 +85,10 @@ def with_retry(
   return decorator
 
 
-@with_retry(max_retries=3, base_delay=1.0)
+@with_retry(max_retries=MAX_RETRIES, base_delay=BASE_DELAY, max_delay=MAX_DELAY)
 def unreliable_api_call(query: str) -> str:
   """Simulates an unreliable API."""
-  if random.random() < 0.5:
+  if random.random() < RANDOM_FAILURE_RATE:
     raise ConnectionError("Simulated API failure")
   return f"Success: {query}"
 
@@ -86,16 +97,19 @@ def unreliable_api_call(query: str) -> str:
 def demo_retry_pattern():
   """Demonstrate retry with exponential backoff."""
 
-  for i in range(4):
-    print(f"\n\033[92mQuery {i + 1}:\033[0m")
+  for i in range(10):
+    print(f"\033[92mQuery {i + 1}:\033[0m")
     try:
       result = unreliable_api_call(f"Query {i + 1}")
       print(f"✅ {result}")
     except Exception as e:
       print(f"\033[91m❌ Failed after retries: {e}\033[0m")
+    print()
 
 
 # === Circuit Breaker ===
+
+
 class CircuitOpenError(Exception):
   """Raised when a call is rejected because the circuit is open."""
 
@@ -103,39 +117,35 @@ class CircuitOpenError(Exception):
 class CircuitBreaker:
   """Circuit breaker pattern for failing services."""
 
-  def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 30.0):
+  def __init__(
+    self, failure_threshold: int = FAILURE_THRESHOLD, recovery_timeout: float = RECOVERY_TIMEOUT
+  ):
     self.failure_threshold = failure_threshold
     self.recovery_timeout = recovery_timeout
     self.failures = 0
     self.last_failure_time = 0
-    self._state = "closed"  # closed, open, half-open
-    self.call_state = "closed"  # state while the last call was being handled
-
-  @property
-  def state(self) -> str:
-    """Current state; an open circuit becomes half-open once the timeout has elapsed."""
-    if self._state == "open" and time.time() - self.last_failure_time > self.recovery_timeout:
-      self._state = "half-open"
-    return self._state
-
-  @state.setter
-  def state(self, value: str) -> None:
-    self._state = value
+    self.state = "closed"  # closed, open, half-open
 
   def call(self, func: Callable, *args, **kwargs):
     """Execute function with circuit breaker protection."""
 
-    self.call_state = self.state
-    if self.call_state == "open":
-      raise CircuitOpenError("Circuit breaker is OPEN")
+    # Check if circuit should move from open to half-open
+    if self.state == "open":
+      # 過了恢復時間 → HALF-OPEN
+      if time.time() - self.last_failure_time > self.recovery_timeout:
+        print("   \033[33mCircuit breaker HALF-OPEN: trying one request\033[0m")
+        self.state = "half-open"
+      else:
+        raise CircuitOpenError("Circuit breaker is OPEN")
 
     try:
       result = func(*args, **kwargs)
 
-      # Success - reset on half-open
+      # Success - close the circuit and reset the consecutive failure count
       if self.state == "half-open":
-        self.state = "closed"
-        self.failures = 0
+        print("   \033[32mCircuit breaker CLOSED after successful trial\033[0m")
+      self.state = "closed"
+      self.failures = 0
 
       return result
 
@@ -143,59 +153,35 @@ class CircuitBreaker:
       self.failures += 1
       self.last_failure_time = time.time()
 
-      if self.failures >= self.failure_threshold:
+      # A failed half-open trial reopens immediately; otherwise wait for the threshold
+      # Service failures 達到門檻 → OPEN
+      if self.state == "half-open" or self.failures >= self.failure_threshold:
+        print(f"   \033[31mCircuit breaker OPENED after {self.failures} Service Failures\033[0m")
         self.state = "open"
 
       raise e
 
 
-# Circuit Breaker Demonstration
-def flaky_service() -> str:
-  if random.random() < RANDOM_FAILURE_RATE:
-    raise Exception(f"Service error with {RANDOM_FAILURE_RATE * 100:.0f}% failure rate")
-  return "OK"
-
-
-def state_label(breaker: CircuitBreaker) -> str:
-  """Show the state the call ran in, plus the resulting state if it changed."""
-  if breaker.call_state == breaker.state:
-    return breaker.state
-  return f"{breaker.call_state} → {breaker.state}"
-
-
-def circuit_breaker_query(breaker: CircuitBreaker, n: int) -> None:
-  """Run one query; if blocked, wait for recovery and retry up to MAX_BLOCKED_RETRIES times."""
-  for retry in range(MAX_BLOCKED_RETRIES + 1):
-    try:
-      result = breaker.call(flaky_service)
-      print(f" ✅ {result} (state: {state_label(breaker)})")
-      return
-    except CircuitOpenError as e:
-      print(f"\033[33m Blocked {n}:\033[0m 🚫 {e} (state: {state_label(breaker)})")
-    except Exception as e:
-      print(f" ❌ {e} (state: {state_label(breaker)})")
-      return
-
-    if retry == MAX_BLOCKED_RETRIES:
-      print(f"\033[91m  Giving up after {MAX_BLOCKED_RETRIES} retries\033[0m")
-      return
-    print(
-      f"\033[33m  ⏳ Waiting {RECOVERY_TIMEOUT}s, then retry {retry + 1}/{MAX_BLOCKED_RETRIES}...\033[0m"
-    )
-    time.sleep(RECOVERY_TIMEOUT)
-    print(f"  state after waiting: {breaker.state}")
-
-
-# Circuit Breaker Demonstration
 def demo_circuit_breaker():
   """Demonstrate circuit breaker pattern."""
 
   breaker = CircuitBreaker(failure_threshold=FAILURE_THRESHOLD, recovery_timeout=RECOVERY_TIMEOUT)
 
-  for i in range(15):
-    print(f"\n\033[92mQuery {i + 1}:\033[0m")
-    circuit_breaker_query(breaker, i + 1)
-    time.sleep(0.5)  # Short delay between queries
+  def flaky_service():
+    if random.random() < RANDOM_FAILURE_RATE:
+      raise Exception("Service error")
+    return "OK"
+
+  for i in range(30):
+    try:
+      result = breaker.call(flaky_service)
+      print(f"Attempt {i + 1}: ✅ {result} (state: {breaker.state})")
+    except CircuitOpenError as e:
+      print(f"Attempt {i + 1}: 🚫 {e} (state: {breaker.state})")
+    except Exception as e:
+      print(f"Attempt {i + 1}: ❌ {e} (state: {breaker.state})")
+
+    time.sleep(0.5)
 
 
 # === Model Fallback Chain ===
@@ -204,11 +190,11 @@ class FallbackChain:
 
   def __init__(self):
     self.models = [
-      ("gpt-4o-mini", ChatOpenAI(model="gpt-4o-mini", temperature=0, timeout=10)),
-      ("gpt-4o", ChatOpenAI(model="gpt-4o", temperature=0, timeout=10)),
+      ("gpt-4o-mini", ChatOpenAI(model="gpt-4o-mini", temperature=0, timeout=FALLBACK_TIMEOUT)),
+      ("gpt-4o", ChatOpenAI(model="gpt-4o", temperature=0, timeout=FALLBACK_TIMEOUT)),
       (
         "claude-sonnet",
-        ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0, timeout=10),
+        ChatAnthropic(model="claude-sonnet-4-5-20250929", temperature=0, timeout=FALLBACK_TIMEOUT),
       ),
     ]
     self.cache = {}
@@ -252,26 +238,26 @@ def demo_fallback_chain():
   queries = [
     "What is 2 + 2?",
     "What is Python?",
-    "What is 2 + 2?",  # Should hit cache
-    "What is Python?",  # Should hit cache
+    "What is the capital of France?",
   ]
 
-  for query in queries:
-    try:
-      result, model = chain.invoke(query)
-      print(f"\033[92mQuery: {query}\033[0m")
-      print(f"- Model: {model}")
-      paragraphs = result.split("\n\n")
-      paragraphs_length = len(paragraphs)
-      first_paragraph = paragraphs[0]
-      print(f"- Response: {first_paragraph}")
-      if paragraphs_length > 1:
-        print("  ...")
-    except Exception as e:
-      print(f"\033[91mQuery: {query}\033[0m")
-      print(f"- ❌ Error: {e}")
+  for i in range(2):  # Run multiple times to demonstrate caching # 2nd run should hit the cache
+    for query in queries:
+      try:
+        result, model = chain.invoke(query)
+        print(f"\033[92mQuery: {query}\033[0m")
+        print(f"- Model: {model}")
+        paragraphs = result.split("\n\n")
+        paragraphs_length = len(paragraphs)
+        first_paragraph = paragraphs[0]
+        print(f"- Response: {first_paragraph}")
+        if paragraphs_length > 1:
+          print("  ...")
+      except Exception as e:
+        print(f"\033[91mQuery: {query}\033[0m")
+        print(f"- ❌ Error: {e}")
 
-    print()
+      print()
 
 
 # === LangGraph Error Handling ===
@@ -368,7 +354,7 @@ def demo_robust_agent():
         "messages": [HumanMessage(content="Hello!")],
         "error": None,
         "retry_count": 0,
-        "max_retries": 3,
+        "max_retries": MAX_RETRIES,
         "success": False,
         "simulated_failures": failures,
       }
@@ -389,15 +375,15 @@ if __name__ == "__main__":
   # except Exception as e:
   #   print(f"API call failed after retries: {e}")
 
-  # Run the retry pattern demonstration
+  # # Run the retry pattern demonstration
   print_section("Retry Pattern Demo")
   demo_retry_pattern()
 
-  # Run the circuit breaker demonstration
+  # # Run the circuit breaker demonstration
   print_section("Circuit Breaker Demo")
   demo_circuit_breaker()
 
-  # Run the fallback chain demonstration
+  # # Run the fallback chain demonstration
   print_section("Fallback Chain Demo")
   demo_fallback_chain()
 
