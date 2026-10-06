@@ -13,16 +13,30 @@ from langsmith import traceable
 
 load_dotenv()
 
+LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+print(f"\033[93mUsing LLM: {LLM.model_name}\033[0m")
+
+LLM1 = ChatOpenAI(model="gpt-4o", temperature=0)
+print(f"\033[93mUsing LLM: {LLM1.model_name}\033[0m")
+
+MAX_TOKENS_PER_REQUEST = 4000
+MAX_TOKENS = 100
+
+
+def print_section(name: str) -> None:
+  blue = "\033[94m"
+  reset = "\033[0m"
+  print(f"\n{blue}{'#' * 60}\n# {name}\n{'#' * 60}{reset}\n")
+
+
 # === Model Routing ===
-
-
 class ModelRouter:
   """Route queries to appropriate model based on complexity."""
 
   def __init__(self):
-    self.cheap_model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    self.expensive_model = ChatOpenAI(model="gpt-4o", temperature=0)
-    self.classifier = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    self.cheap_model = LLM
+    self.expensive_model = LLM1
+    self.classifier = LLM
 
   def classify_complexity(self, query: str) -> str:
     """Classify query complexity."""
@@ -80,30 +94,33 @@ def demo_model_routing():
     "What color is the sky?",  # Simple
   ]
 
-  print("Model Routing Demo:\n")
+  # print("Model Routing Demo:\n")
 
   total_cost = 0
   for query in queries:
     result, model, cost = router.invoke(query)
     total_cost += cost
-    print(f"Query: {query[:50]}...")
-    print(f"  Model: {model}")
-    print(f"  Est. Cost: ${cost:.6f}")
-    print(f"  Response: {result[:50]}...")
+    print(f"\033[32mQuery: {query}\033[0m")
+    print(f"\033[33m- Model: {model}\033[0m")
+    response = result.split("\n\n")  # Show only first line of response
+    if len(response) > 1:
+      response = response[0] + " (truncated)..."
+    else:
+      response = response[0]
+    print(f"\033[32m- Response: {response}\033[0m")
+    print(f"\033[33m- Est. Cost: ${cost:.6f}\033[0m\n")
 
-  print(f"\nTotal Estimated Cost: ${total_cost:.6f}")
+  print(f"\033[34mTotal Estimated Cost: ${total_cost:.6f}\033[0m")
 
 
 # === Semantic Caching ===
-
-
 class SemanticCache:
   """Cache responses with semantic similarity matching."""
 
   def __init__(self, similarity_threshold: float = 0.9):
     self.cache = {}
     self.threshold = similarity_threshold
-    self.embedder = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    self.embedder = LLM
 
   def _hash_query(self, query: str) -> str:
     """Create hash of normalized query."""
@@ -136,7 +153,7 @@ class CachedLLM:
   """LLM wrapper with caching."""
 
   def __init__(self):
-    self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    self.llm = LLM
     self.cache = SemanticCache()
     self.cache_hits = 0
     self.cache_misses = 0
@@ -173,6 +190,7 @@ class CachedLLM:
     }
 
 
+# Demonstration of caching
 def demo_caching():
   """Demonstrate caching."""
 
@@ -184,25 +202,32 @@ def demo_caching():
     "What is Python?",  # Cache hit
     "What is python?",  # Cache hit (normalized)
     "What is Rust?",
+    "What is Java",
   ]
 
-  print("\nCaching Demo:\n")
+  # print("\nCaching Demo:\n")
 
   for query in queries:
+    print(f"\033[32mQuery: {query}\033[0m")
     result, from_cache = llm.invoke(query)
     source = "CACHE" if from_cache else "LLM"
-    print(f"[{source}] {query} -> {result[:30]}...")
+    print(f"\033[33m- Source: [{source}]\033[0m")
+    response = result.split("\n\n")  # Show only first line of response
+    if len(response) > 1:
+      response = response[0] + " (truncated)..."
+    else:
+      response = response[0]
 
-  print(f"\nStats: {llm.get_stats()}")
+    print(f"- Response: {response}\n")
+
+  print(f"\n\033[34mStats: {llm.get_stats()}\033[0m")
 
 
 # === Token Budgeting ===
-
-
 class TokenBudget:
   """Track and limit token usage."""
 
-  def __init__(self, max_tokens_per_request: int = 4000):
+  def __init__(self, max_tokens_per_request: int = MAX_TOKENS_PER_REQUEST):
     self.max_per_request = max_tokens_per_request
     self.usage = {"total_input": 0, "total_output": 0, "requests": 0}
 
@@ -213,6 +238,7 @@ class TokenBudget:
   def check_budget(self, text: str) -> tuple[bool, int]:
     """Check if request is within budget."""
     tokens = self.estimate_tokens(text)
+    # print(f"\033[38;5;94mEstimated tokens for request: {tokens}\033[0m")
     return tokens <= self.max_per_request, tokens
 
   def record_usage(self, input_tokens: int, output_tokens: int):
@@ -234,8 +260,8 @@ class TokenBudget:
 class BudgetedLLM:
   """LLM with token budgeting."""
 
-  def __init__(self, max_tokens: int = 4000):
-    self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+  def __init__(self, max_tokens: int = MAX_TOKENS_PER_REQUEST):
+    self.llm = LLM
     self.budget = TokenBudget(max_tokens_per_request=max_tokens)
 
   @traceable(name="budgeted_invoke")
@@ -243,6 +269,7 @@ class BudgetedLLM:
     # Check budget
     within_budget, tokens = self.budget.check_budget(query)
 
+    # Raise error if over budget
     if not within_budget:
       raise ValueError(f"Query exceeds token budget: {tokens} > {self.budget.max_per_request}")
 
@@ -263,28 +290,43 @@ class BudgetedLLM:
 def demo_token_budgeting():
   """Demonstrate token budgeting."""
 
-  llm = BudgetedLLM(max_tokens=100)
+  llm = BudgetedLLM(max_tokens=MAX_TOKENS)
 
   queries = [
     "What is AI?",  # Within budget
-    "Explain " + "very " * 100 + "complex topic",  # Over budget
+    "Explain " + "very " * 10 + "\n" + "very " * 90 + "complex topic",  # Over budget
+    "What is the capital of France?",  # Within budget
+    "Write a short poem about the sea.",  # Within budget
   ]
 
-  print("\nToken Budgeting Demo:\n")
+  # print("\nToken Budgeting Demo:\n")
 
   for query in queries:
     try:
       result = llm.invoke(query)
-      print(f"✅ {query[:40]}... -> {result[:30]}...")
+      print(f"\033[32m✅ Query: {query}\033[0m")
+      response = result.split("\n\n")  # Show only first line of response
+      if len(response) > 1:
+        response = response[0] + " (truncated)..."
+      else:
+        response = response[0]
+      print(f"\033[33mResponse:\033[0m\n{response}\n")
     except ValueError as e:
-      print(f"❌ {query[:40]}... -> {e}")
+      question = query.split("\n")[0] + " (truncated)..."  # Show only first line of query
+      print(f"\033[31m❌ Query: {question}\033[0m")
+      print(f"Error: {e}\n")
 
-  print(f"\nUsage: {llm.get_stats()}")
+  print(f"\033[34mStats: {llm.get_stats()}\033[0m")
 
 
 if __name__ == "__main__":
-  # demo_model_routing()
-  # demo_caching()
+  print_section("Demo Model Routing")
+  demo_model_routing()
+
+  print_section("DemoCaching")
+  demo_caching()
+
+  print_section("Demo Token Budgeting")
   demo_token_budgeting()
 
   # Production version would:
