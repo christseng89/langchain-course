@@ -70,7 +70,13 @@ class InputSanitizer:
     r"bypass\s+(all\s+)?restrictions",  # 「繞過(所有)限制」
   ]
 
-  # 常见的自助操作说法,即使命中上面的凭证关键字也视为安全(不是在套取他人凭证)
+  # 凭证类规则:套取或篡改模型的密码、密钥。只有这组规则可以被 SAFE_PATTERNS 豁免
+  CREDENTIAL_PATTERNS = [
+    r"(reveal|show|tell|give|print|leak|share)\s+(me\s+)?(your|the)\s+(\w+\s+)?(password|api\s*key|secret|credentials?|token)",  # 套取凭证
+    r"(change|reset|set|update|modify|overwrite)\s+your\s+(\w+\s+)?(password|api\s*key|secret|credentials?|token)",  # 篡改凭证
+  ]
+
+  # 常见的自助操作说法,命中后只豁免凭证类规则(不是在套取他人凭证),注入类规则仍然照常检查
   SAFE_PATTERNS = [
     r"\b(reset|change|forgot|recover|update)\s+(my|our)\s+(password|pin)\b",
   ]
@@ -81,14 +87,21 @@ class InputSanitizer:
 
   def __init__(self):
     self.patterns = [re.compile(p, re.IGNORECASE) for p in self.INJECTION_PATTERNS]
+    self.credential_regexes = [re.compile(p, re.IGNORECASE) for p in self.CREDENTIAL_PATTERNS]
     self.allowlist_patterns = [re.compile(p, re.IGNORECASE) for p in self.SAFE_PATTERNS]
 
   def is_suspicious(self, text: str) -> tuple[bool, Optional[str]]:
     """Check if input contains suspicious patterns."""
+    # 注入类规则始终检查,不受白名单影响
+    for pattern in self.patterns:
+      if pattern.search(text):
+        return True, f"Suspicious pattern: {pattern.pattern}"
+
+    # 凭证类规则:命中白名单(如 "reset my password")时跳过
     if any(pattern.search(text) for pattern in self.allowlist_patterns):
       return False, None
 
-    for pattern in self.patterns:
+    for pattern in self.credential_regexes:
       if pattern.search(text):
         return True, f"Suspicious pattern: {pattern.pattern}"
     return False, None
